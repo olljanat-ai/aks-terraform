@@ -136,6 +136,16 @@ module "aks" {
   }
   tags = local.cluster_tags
 
+  security_profile ={
+    image_cleaner = {
+      enabled = true
+      interval_hours = 168
+    }
+    workload_identity = {
+      enabled = true
+    }
+  }
+
   depends_on = [
     azurerm_role_assignment.network_contributor,
     azurerm_role_assignment.private_dns_zone_contributor,

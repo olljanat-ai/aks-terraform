@@ -213,13 +213,6 @@ DESCRIPTION
   }
 }
 
-variable "tags" {
-  type        = map(string)
-  default     = {}
-  description = "Tags applied to the cluster and to the cluster identity."
-  nullable    = false
-}
-
 variable "virtual_network_resource_group_name" {
   type        = string
   default     = null

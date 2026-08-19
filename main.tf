@@ -45,7 +45,6 @@ resource "azurerm_user_assigned_identity" "this" {
   location            = var.location
   name                = "${var.name}-identity"
   resource_group_name = var.resource_group_name
-  tags                = var.tags
 }
 
 # Lets the cluster join nodes and load balancers to the existing virtual network.
@@ -121,7 +120,6 @@ module "aks" {
     name = var.sku_name
     tier = var.sku_tier
   }
-  tags = var.tags
 
   depends_on = [
     azurerm_role_assignment.network_contributor,

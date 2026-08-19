@@ -136,14 +136,25 @@ module "aks" {
   }
   tags = local.cluster_tags
 
-  security_profile ={
+  disable_local_accounts = true
+  security_profile = {
     image_cleaner = {
-      enabled = true
+      enabled        = true
       interval_hours = 168
     }
     workload_identity = {
       enabled = true
     }
+  }
+
+  auto_upgrade_profile = {
+    node_os_upgrade_channel = "NodeImage"
+    upgrade_channel         = "stable"
+  }
+  upgrade_settings = {
+    drain_timeout_in_minutes      = 0
+    max_surge                     = "10%"
+    node_soak_duration_in_minutes = 0
   }
 
   depends_on = [

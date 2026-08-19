@@ -120,9 +120,9 @@ variable "network_profile" {
     network_dataplane   = optional(string, "cilium")
     load_balancer_sku   = optional(string)
     outbound_type       = optional(string, "loadBalancer")
-    pod_cidr            = optional(string, "100.64.0.0/16")
-    service_cidr        = optional(string, "10.100.0.0/16")
-    dns_service_ip      = optional(string, "10.100.0.10")
+    pod_cidr            = optional(string, "100.201.0.0/16")
+    service_cidr        = optional(string, "100.202.0.0/16")
+    dns_service_ip      = optional(string, "100.202.0.10")
   })
   default     = {}
   description = <<DESCRIPTION

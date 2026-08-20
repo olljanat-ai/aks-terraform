@@ -103,6 +103,9 @@ A public cluster does not use the private DNS zone, so `private_dns_zone_name` c
 
 ## Notes
 
+- **Workload identity** is on, together with the **OIDC issuer** it requires. Federate a Kubernetes
+  service account with an Entra ID application against the `oidc_issuer_url` output instead of
+  storing credentials in the cluster.
 - The cluster uses a **user assigned identity** created by this module. AKS must be able to write
   records into the private DNS zone before the cluster exists, which a system assigned identity
   cannot do.

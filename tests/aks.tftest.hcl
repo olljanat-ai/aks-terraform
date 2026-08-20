@@ -277,6 +277,43 @@ run "rejects_a_max_surge_azure_cannot_read" {
   expect_failures = [var.default_node_pool]
 }
 
+run "rejects_a_pinned_version_the_upgrade_channel_would_move_past" {
+  command = plan
+
+  variables {
+    kubernetes_version = "1.32"
+    auto_upgrade = {
+      kubernetes_channel = "stable"
+    }
+  }
+
+  expect_failures = [var.auto_upgrade]
+}
+
+run "rejects_patch_upgrades_of_an_exactly_pinned_version" {
+  command = plan
+
+  variables {
+    kubernetes_version = "1.32.4"
+    auto_upgrade = {
+      kubernetes_channel = "patch"
+    }
+  }
+
+  expect_failures = [var.auto_upgrade]
+}
+
+run "accepts_patch_upgrades_of_a_minor_version_pin" {
+  command = plan
+
+  variables {
+    kubernetes_version = "1.32"
+    auto_upgrade = {
+      kubernetes_channel = "patch"
+    }
+  }
+}
+
 run "rejects_a_kubernetes_version_with_a_leading_v" {
   command = plan
 

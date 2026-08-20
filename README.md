@@ -105,10 +105,16 @@ az aks command invoke --resource-group <resource_group_name> \
 
 ## Upgrade window
 
-The cluster upgrades itself - the `stable` channel for the Kubernetes version, the `NodeImage`
-channel for node OS patching. Those upgrades, together with the weekly AKS release of the control
-plane and add-ons, are confined to a single weekly [planned maintenance][maintenance] window. It
-defaults to the night between Tuesday and Wednesday, 22:00 - 06:00 UTC.
+The cluster upgrades itself - by default the `stable` channel for the Kubernetes version and the
+`NodeImage` channel for node OS patching, both configurable through `auto_upgrade`. Those upgrades,
+together with the weekly AKS release of the control plane and add-ons, are confined to a single
+weekly [planned maintenance][maintenance] window. It defaults to the night between Tuesday and
+Wednesday, 22:00 - 06:00 UTC.
+
+Pinning `kubernetes_version` and letting a channel move past it are mutually exclusive, and
+Terraform refuses the combination: AKS would upgrade the cluster, the next apply would write the
+pinned version back, and Azure rejects a downgrade. Pin the version and set
+`auto_upgrade = { kubernetes_channel = "none" }`, or pin only the minor version and use `"patch"`.
 
 Change it per environment in the variables file:
 

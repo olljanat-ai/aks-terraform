@@ -143,7 +143,7 @@ Point `log_analytics_workspace_resource_id` at an existing Log Analytics workspa
 [Container Insights][insights] for node and pod telemetry and to ship the control plane logs there:
 
 ```hcl
-log_analytics_workspace_resource_id = "/subscriptions/.../resourceGroups/rg-monitoring/providers/Microsoft.OperationalInsights/workspaces/law-shared"
+log_analytics_workspace_resource_id = "/subscriptions/<subscription>/resourceGroups/rg-monitoring/providers/Microsoft.OperationalInsights/workspaces/law-shared"
 ```
 
 The control plane keeps no history of its own, so without this nothing records what the API server

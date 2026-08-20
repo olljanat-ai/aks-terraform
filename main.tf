@@ -151,6 +151,7 @@ module "aks" {
     node_os_upgrade_channel = "NodeImage"
     upgrade_channel         = "stable"
   }
+  maintenanceconfiguration = local.maintenance_configurations
   upgrade_settings = {
     drain_timeout_in_minutes      = 0
     max_surge                     = "10%"

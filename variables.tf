@@ -82,6 +82,43 @@ DESCRIPTION
   }
 }
 
+variable "auto_upgrade" {
+  type = object({
+    kubernetes_channel = optional(string, "stable")
+    node_os_channel    = optional(string, "NodeImage")
+  })
+  default     = {}
+  description = <<DESCRIPTION
+How the cluster upgrades itself. Both run inside the `maintenance_window`.
+
+- `kubernetes_channel` - Kubernetes version upgrades. `stable` follows the second newest minor
+  version AKS offers, `rapid` the newest, `patch` stays on the current minor version and takes its
+  patches, `node-image` upgrades only the node image, and `none` leaves every upgrade to you.
+- `node_os_channel` - Node OS patching. `NodeImage` rolls the nodes onto the weekly AKS node image,
+  `SecurityPatch` applies security updates to the running image between those, `None` and
+  `Unmanaged` leave the OS to you and to the distribution respectively.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = contains(["node-image", "none", "patch", "rapid", "stable"], var.auto_upgrade.kubernetes_channel)
+    error_message = "auto_upgrade.kubernetes_channel must be one of \"none\", \"patch\", \"stable\", \"rapid\" or \"node-image\"."
+  }
+  validation {
+    condition     = contains(["NodeImage", "None", "SecurityPatch", "Unmanaged"], var.auto_upgrade.node_os_channel)
+    error_message = "auto_upgrade.node_os_channel must be one of \"NodeImage\", \"SecurityPatch\", \"None\" or \"Unmanaged\"."
+  }
+  # A pinned version and a channel that moves past it fight each other: AKS upgrades the cluster,
+  # Terraform writes the pinned version back, and Azure refuses the downgrade.
+  validation {
+    condition = var.kubernetes_version == null || contains(
+      length(split(".", coalesce(var.kubernetes_version, "0.0"))) > 2 ? ["node-image", "none"] : ["node-image", "none", "patch"],
+      var.auto_upgrade.kubernetes_channel
+    )
+    error_message = "A pinned kubernetes_version needs auto_upgrade.kubernetes_channel to be \"none\" or \"node-image\", or \"patch\" when only the minor version is pinned. Any other channel upgrades the cluster past the pin, and Terraform cannot put it back."
+  }
+}
+
 variable "azure_policy_enabled" {
   type        = bool
   default     = true

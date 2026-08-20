@@ -216,8 +216,8 @@ module "aks" {
   }
 
   auto_upgrade_profile = {
-    node_os_upgrade_channel = "NodeImage"
-    upgrade_channel         = "stable"
+    node_os_upgrade_channel = var.auto_upgrade.node_os_channel
+    upgrade_channel         = var.auto_upgrade.kubernetes_channel
   }
   depends_on = [
     azurerm_role_assignment.network_contributor,

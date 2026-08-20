@@ -117,6 +117,18 @@ module "aks" {
     managed                = true
     tenant_id              = data.azurerm_client_config.current.tenant_id
   }
+  # Gatekeeper, so that Azure Policy definitions are actually enforced inside the cluster.
+  addon_profile_azure_policy = {
+    enabled = var.azure_policy_enabled
+  }
+  # Container Insights. Managed identity authentication rather than the workspace key.
+  addon_profile_oms_agent = local.log_analytics_workspace_resource_id == null ? null : {
+    enabled = true
+    config = {
+      log_analytics_workspace_resource_id = local.log_analytics_workspace_resource_id
+      use_aad_auth                        = true
+    }
+  }
   api_server_access_profile = {
     authorized_ip_ranges               = local.api_server_authorized_ip_ranges
     enable_private_cluster             = var.private_cluster_enabled
@@ -145,18 +157,6 @@ module "aks" {
     }
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = data.azurerm_subnet.node.id
-  }
-  # Gatekeeper, so that Azure Policy definitions are actually enforced inside the cluster.
-  addon_profile_azure_policy = {
-    enabled = var.azure_policy_enabled
-  }
-  # Container Insights. Managed identity authentication rather than the workspace key.
-  addon_profile_oms_agent = local.log_analytics_workspace_resource_id == null ? null : {
-    enabled = true
-    config = {
-      log_analytics_workspace_resource_id = local.log_analytics_workspace_resource_id
-      use_aad_auth                        = true
-    }
   }
   # Control plane logs. Nothing else records what the API server was asked to do, and the cluster
   # keeps none of it once the control plane is gone.
@@ -269,7 +269,7 @@ resource "azapi_resource" "maintenance_configuration" {
       }
     }
   }
-  # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates the request.
+  # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates it.
   schema_validation_enabled = false
 }
 

@@ -82,17 +82,6 @@ DESCRIPTION
   }
 }
 
-variable "create_role_assignments" {
-  type        = bool
-  default     = true
-  description = <<DESCRIPTION
-Create the role assignments the cluster identity needs on the existing network and private DNS zone.
-Set to `false` when the assignments are managed elsewhere - the deployment then requires no
-`Microsoft.Authorization/roleAssignments/write` permission.
-DESCRIPTION
-  nullable    = false
-}
-
 variable "azure_policy_enabled" {
   type        = bool
   default     = true
@@ -126,34 +115,15 @@ DESCRIPTION
   }
 }
 
-variable "defender_enabled" {
+variable "create_role_assignments" {
   type        = bool
-  default     = false
+  default     = true
   description = <<DESCRIPTION
-Whether to enable Microsoft Defender for Containers threat detection on the cluster. Requires
-`log_analytics_workspace_resource_id`, and is billed per vCPU hour.
+Create the role assignments the cluster identity needs on the existing network and private DNS zone.
+Set to `false` when the assignments are managed elsewhere - the deployment then requires no
+`Microsoft.Authorization/roleAssignments/write` permission.
 DESCRIPTION
   nullable    = false
-
-  validation {
-    condition     = !var.defender_enabled || var.log_analytics_workspace_resource_id != null
-    error_message = "defender_enabled requires log_analytics_workspace_resource_id."
-  }
-}
-
-variable "log_analytics_workspace_resource_id" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Resource ID of an existing Log Analytics workspace. Setting it turns on Container Insights for node
-and pod telemetry and ships the control plane logs in `control_plane_log_categories` there. Left
-null, the cluster emits platform metrics only and nothing is billed for ingestion.
-DESCRIPTION
-
-  validation {
-    condition     = var.log_analytics_workspace_resource_id == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.OperationalInsights/workspaces/[^/]+$", coalesce(var.log_analytics_workspace_resource_id, "")))
-    error_message = "log_analytics_workspace_resource_id must be a full workspace resource ID, starting with /subscriptions/."
-  }
 }
 
 variable "default_node_pool" {
@@ -226,6 +196,21 @@ DESCRIPTION
   }
 }
 
+variable "defender_enabled" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether to enable Microsoft Defender for Containers threat detection on the cluster. Requires
+`log_analytics_workspace_resource_id`, and is billed per vCPU hour.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = !var.defender_enabled || var.log_analytics_workspace_resource_id != null
+    error_message = "defender_enabled requires log_analytics_workspace_resource_id."
+  }
+}
+
 variable "enable_telemetry" {
   type        = bool
   default     = true
@@ -283,6 +268,21 @@ DESCRIPTION
   }
 }
 
+variable "log_analytics_workspace_resource_id" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Resource ID of an existing Log Analytics workspace. Setting it turns on Container Insights for node
+and pod telemetry and ships the control plane logs in `control_plane_log_categories` there. Left
+null, the cluster emits platform metrics only and nothing is billed for ingestion.
+DESCRIPTION
+
+  validation {
+    condition     = var.log_analytics_workspace_resource_id == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.OperationalInsights/workspaces/[^/]+$", coalesce(var.log_analytics_workspace_resource_id, "")))
+    error_message = "log_analytics_workspace_resource_id must be a full workspace resource ID, starting with /subscriptions/."
+  }
+}
+
 variable "maintenance_window" {
   type = object({
     day_of_week    = optional(string, "Tuesday")
@@ -326,27 +326,6 @@ DESCRIPTION
   validation {
     condition     = can(regex("^[-+][0-9]{2}:[0-9]{2}$", var.maintenance_window.utc_offset))
     error_message = "maintenance_window.utc_offset must be of the form +HH:MM or -HH:MM."
-  }
-}
-
-variable "network_role_assignment_scope" {
-  type        = string
-  default     = "subnet"
-  description = <<DESCRIPTION
-Scope of the `Network Contributor` assignment the cluster identity gets on the existing network.
-
-- `subnet` - One assignment per subnet the cluster actually uses. This is the least privilege that
-  AKS documents for a bring-your-own network, and the default.
-- `virtual_network` - A single assignment on the whole virtual network. Needed only when the cluster
-  has to reach network resources outside its own subnets.
-
-Ignored when `create_role_assignments = false`.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = contains(["subnet", "virtual_network"], var.network_role_assignment_scope)
-    error_message = "network_role_assignment_scope must be either \"subnet\" or \"virtual_network\"."
   }
 }
 
@@ -418,20 +397,24 @@ DESCRIPTION
   }
 }
 
-variable "role_assignment_propagation_delay" {
+variable "network_role_assignment_scope" {
   type        = string
-  default     = "60s"
+  default     = "subnet"
   description = <<DESCRIPTION
-How long to wait after creating the role assignments before creating the cluster. Azure RBAC is
-eventually consistent, so a cluster created the moment the assignment returns is regularly refused
-access to the subnet it is supposed to join. Set to `"0s"` to skip the wait, for example when the
-assignments already existed. Ignored when `create_role_assignments = false`.
+Scope of the `Network Contributor` assignment the cluster identity gets on the existing network.
+
+- `subnet` - One assignment per subnet the cluster actually uses. This is the least privilege that
+  AKS documents for a bring-your-own network, and the default.
+- `virtual_network` - A single assignment on the whole virtual network. Needed only when the cluster
+  has to reach network resources outside its own subnets.
+
+Ignored when `create_role_assignments = false`.
 DESCRIPTION
   nullable    = false
 
   validation {
-    condition     = can(regex("^[0-9]+(ms|s|m|h)$", var.role_assignment_propagation_delay))
-    error_message = "role_assignment_propagation_delay must be a duration such as \"60s\" or \"2m\"."
+    condition     = contains(["subnet", "virtual_network"], var.network_role_assignment_scope)
+    error_message = "network_role_assignment_scope must be either \"subnet\" or \"virtual_network\"."
   }
 }
 
@@ -467,6 +450,23 @@ variable "private_dns_zone_resource_group_name" {
   type        = string
   default     = null
   description = "Resource group of the existing private DNS zone. Defaults to `resource_group_name`."
+}
+
+variable "role_assignment_propagation_delay" {
+  type        = string
+  default     = "60s"
+  description = <<DESCRIPTION
+How long to wait after creating the role assignments before creating the cluster. Azure RBAC is
+eventually consistent, so a cluster created the moment the assignment returns is regularly refused
+access to the subnet it is supposed to join. Set to `"0s"` to skip the wait, for example when the
+assignments already existed. Ignored when `create_role_assignments = false`.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[0-9]+(ms|s|m|h)$", var.role_assignment_propagation_delay))
+    error_message = "role_assignment_propagation_delay must be a duration such as \"60s\" or \"2m\"."
+  }
 }
 
 variable "sku_name" {

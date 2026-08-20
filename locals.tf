@@ -1,4 +1,7 @@
 locals {
+  # API version of the AKS resource provider used by the resources written directly rather than
+  # through the module. One place to bump, so that the two cannot drift apart.
+  aks_api_version = "2026-03-01"
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
   # Tags the cluster already carries in Azure, or null while it does not exist yet or carries none.

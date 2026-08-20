@@ -26,14 +26,14 @@ output "name" {
   value       = module.aks.name
 }
 
-output "node_resource_group_name" {
-  description = "Name of the resource group holding the cluster infrastructure."
-  value       = module.aks.node_resource_group_name
-}
-
 output "node_resource_group_id" {
   description = "Resource ID of the resource group holding the cluster infrastructure."
   value       = module.aks.node_resource_group_id
+}
+
+output "node_resource_group_name" {
+  description = "Name of the resource group holding the cluster infrastructure."
+  value       = module.aks.node_resource_group_name
 }
 
 output "oidc_issuer_url" {

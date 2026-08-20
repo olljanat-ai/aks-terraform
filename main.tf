@@ -226,6 +226,16 @@ module "aks" {
   ]
 }
 
+# A public API server with no allowlist is reachable from anywhere on the internet, and Azure will
+# not stop you from creating one. Terraform reports this as a warning rather than an error, because
+# it is a legitimate choice for a throwaway cluster and a bad one for anything else.
+check "api_server_exposure" {
+  assert {
+    condition     = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) > 0
+    error_message = "The API server of ${var.name} is public and reachable from any address. Set private_cluster_enabled = true, or list the ranges that need to reach it in api_server_authorized_ip_ranges."
+  }
+}
+
 # The upgrade windows. Azure fixes the three names: `default` covers the weekly AKS release of the
 # control plane and add-ons, `aksManagedAutoUpgradeSchedule` the Kubernetes version upgrade driven by
 # `upgrade_channel`, and `aksManagedNodeOSUpgradeSchedule` the node image patching driven by

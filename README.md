@@ -166,6 +166,10 @@ api_server_authorized_ip_ranges = ["203.0.113.0/24"]
 
 A public cluster does not use the private DNS zone, so `private_dns_zone_name` can be left unset.
 
+Leaving `api_server_authorized_ip_ranges` empty leaves the API server reachable from any address on
+the internet. Terraform warns about that on every plan rather than refusing it - it is a defensible
+choice for a throwaway cluster and a poor one for anything else.
+
 ## Notes
 
 - `lock_kind = "CanNotDelete"` puts a **management lock** on the cluster, so that neither Terraform

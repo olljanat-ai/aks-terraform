@@ -1,0 +1,63 @@
+name: Terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the running check pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with the lower bound of required_version in terraform.tf.
+  TERRAFORM_VERSION: "1.14.4"
+
+jobs:
+  validate:
+    name: Format, validate and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff
+
+      # No backend and no credentials: this only has to resolve the providers and the module.
+      - name: Initialize
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      # The providers are mocked in the suite, so this reaches no Azure subscription.
+      - name: Test
+        run: terraform test
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.60.0
+
+      - name: Install the rulesets pinned in .tflint.hcl
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Lint
+        run: tflint --format=compact

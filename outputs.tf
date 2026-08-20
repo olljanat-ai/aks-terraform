@@ -13,6 +13,14 @@ output "identity_resource_id" {
   value       = azurerm_user_assigned_identity.this.id
 }
 
+output "kubelet_identity_object_id" {
+  description = <<DESCRIPTION
+Object ID of the identity the nodes run as. Grant it `AcrPull` on a container registry to let the
+cluster pull images without a pull secret.
+DESCRIPTION
+  value       = try(module.aks.kubelet_identity.objectId, null)
+}
+
 output "name" {
   description = "Name of the AKS cluster."
   value       = module.aks.name
@@ -21,6 +29,11 @@ output "name" {
 output "node_resource_group_name" {
   description = "Name of the resource group holding the cluster infrastructure."
   value       = module.aks.node_resource_group_name
+}
+
+output "node_resource_group_id" {
+  description = "Resource ID of the resource group holding the cluster infrastructure."
+  value       = module.aks.node_resource_group_id
 }
 
 output "oidc_issuer_url" {

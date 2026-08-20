@@ -46,7 +46,7 @@ data "azurerm_private_dns_zone" "this" {
 # missing resource is an error.
 data "azapi_resource_list" "managed_clusters" {
   parent_id = data.azurerm_resource_group.this.id
-  type      = "Microsoft.ContainerService/managedClusters@2026-03-01"
+  type      = "Microsoft.ContainerService/managedClusters@${local.aks_api_version}"
   response_export_values = {
     tags = "value[?name=='${var.name}'] | [0].tags"
   }
@@ -253,7 +253,7 @@ resource "azapi_resource" "maintenance_configuration" {
 
   name      = each.key
   parent_id = module.aks.resource_id
-  type      = "Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2026-03-01"
+  type      = "Microsoft.ContainerService/managedClusters/maintenanceConfigurations@${local.aks_api_version}"
   body = {
     properties = {
       maintenanceWindow = {
@@ -269,7 +269,7 @@ resource "azapi_resource" "maintenance_configuration" {
       }
     }
   }
-  # AzAPI's embedded AKS schema does not cover 2026-03-01 yet. Azure still validates the request.
+  # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates the request.
   schema_validation_enabled = false
 }
 

@@ -138,6 +138,28 @@ module "aks" {
     vm_size             = var.default_node_pool.vm_size
     vnet_subnet_id      = data.azurerm_subnet.node.id
   }
+  # Gatekeeper, so that Azure Policy definitions are actually enforced inside the cluster.
+  addon_profile_azure_policy = {
+    enabled = var.azure_policy_enabled
+  }
+  # Container Insights. Managed identity authentication rather than the workspace key.
+  addon_profile_oms_agent = local.log_analytics_workspace_resource_id == null ? null : {
+    enabled = true
+    config = {
+      log_analytics_workspace_resource_id = local.log_analytics_workspace_resource_id
+      use_aad_auth                        = true
+    }
+  }
+  # Control plane logs. Nothing else records what the API server was asked to do, and the cluster
+  # keeps none of it once the control plane is gone.
+  diagnostic_settings = local.log_analytics_workspace_resource_id == null ? {} : {
+    control_plane = {
+      name                  = "${var.name}-control-plane"
+      log_categories        = var.control_plane_log_categories
+      log_groups            = []
+      workspace_resource_id = local.log_analytics_workspace_resource_id
+    }
+  }
   dns_prefix       = var.name
   enable_telemetry = var.enable_telemetry
   fqdn_subdomain   = local.fqdn_subdomain
@@ -167,6 +189,12 @@ module "aks" {
     enabled = true
   }
   security_profile = {
+    defender = !var.defender_enabled ? null : {
+      log_analytics_workspace_resource_id = local.log_analytics_workspace_resource_id
+      security_monitoring = {
+        enabled = true
+      }
+    }
     image_cleaner = {
       enabled        = true
       interval_hours = 168

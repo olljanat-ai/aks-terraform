@@ -76,11 +76,31 @@ terraform test
 tflint --init && tflint
 ```
 
-Because the cluster is private, `az aks get-credentials` produces a kubeconfig that only resolves
-from inside the virtual network or from a network that can reach it:
+## Cluster access
+
+Local Kubernetes accounts are **disabled**, so there is no cluster-admin certificate to hand around
+and `az aks get-credentials --admin` does not work. Everything authenticates as an Entra ID
+identity, and Azure RBAC decides what that identity may do inside the cluster.
 
 ```sh
 az aks get-credentials --resource-group <resource_group_name> --name "$(terraform output -raw name)"
+kubectl get nodes
+```
+
+Two things have to be granted before that returns anything:
+
+- **`Azure Kubernetes Service Cluster User Role`** on the cluster, to download a kubeconfig at all.
+- A Kubernetes-level role, either by listing a group in `entra_admin_group_object_ids` or by
+  assigning `Azure Kubernetes Service RBAC Cluster Admin`, `... RBAC Admin`, `... RBAC Writer` or
+  `... RBAC Reader` on the cluster or on a namespace inside it.
+
+Because the cluster is private, the kubeconfig only resolves from inside the virtual network or from
+a network that reaches it. Without that path, `az aks command invoke` runs a command in the cluster
+through the Azure control plane instead:
+
+```sh
+az aks command invoke --resource-group <resource_group_name> \
+  --name "$(terraform output -raw name)" --command "kubectl get nodes"
 ```
 
 ## Upgrade window
@@ -175,6 +195,9 @@ choice for a throwaway cluster and a poor one for anything else.
 - `lock_kind = "CanNotDelete"` puts a **management lock** on the cluster, so that neither Terraform
   nor a portal click can delete it. Terraform can still change it; removing the lock is a separate,
   deliberate step. Note that `ReadOnly` also blocks the upgrades AKS runs on its own.
+- The `Free` tier carries **no uptime SLA** for the control plane. `sku_tier = "Standard"` buys the
+  99.9% (or 99.95% across availability zones) financially backed SLA and raises the supported node
+  count; production clusters belong there.
 - **Workload identity** is on, together with the **OIDC issuer** it requires. Federate a Kubernetes
   service account with an Entra ID application against the `oidc_issuer_url` output instead of
   storing credentials in the cluster.

@@ -38,6 +38,20 @@ data "azurerm_private_dns_zone" "this" {
   resource_group_name = local.private_dns_zone_resource_group_name
 }
 
+# Cluster tags are maintained outside Terraform, by the automation running against the cluster. They
+# are read back here and handed to the module unchanged, so that Terraform leaves them alone. Without
+# that every plan proposes deleting them, and the resulting update turns every computed cluster
+# attribute - FQDN, node resource group, OIDC issuer URL - unknown again. The cluster is listed
+# rather than looked up directly, because it does not exist yet on the first apply and a lookup of a
+# missing resource is an error.
+data "azapi_resource_list" "managed_clusters" {
+  parent_id = data.azurerm_resource_group.this.id
+  type      = "Microsoft.ContainerService/managedClusters@2026-03-01"
+  response_export_values = {
+    tags = "value[?name=='${var.name}'] | [0].tags"
+  }
+}
+
 # AKS needs an identity that already exists when the cluster is created, so that it can be granted
 # access to the pre-existing network and private DNS zone. A system assigned identity cannot be used
 # for that, because it only comes into existence together with the cluster.
@@ -120,6 +134,7 @@ module "aks" {
     name = var.sku_name
     tier = var.sku_tier
   }
+  tags = local.cluster_tags
 
   depends_on = [
     azurerm_role_assignment.network_contributor,

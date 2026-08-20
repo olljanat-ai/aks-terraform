@@ -80,6 +80,11 @@ A public cluster does not use the private DNS zone, so `private_dns_zone_name` c
   cannot do.
 - Azure requires an `fqdnSubdomain` instead of a `dnsPrefix` when a bring-your-own private DNS zone
   is used, so the module derives it from the cluster name.
+- Cluster **tags are not managed here**. Automation outside Terraform adjusts them, so the existing
+  tags are read back from Azure and passed to the module as-is. Otherwise every plan would propose
+  deleting them, and that update alone would make Terraform re-read every computed cluster
+  attribute, showing `fqdn`, `node_resource_group_name` and `oidc_issuer_url` as
+  `(known after apply)` on an unchanged cluster.
 - AKS Automatic ignores most cluster settings on purpose, which is why both SKUs share one set of
   variables: the AVM module drops everything Automatic does not accept from `default_node_pool` and
   `network_profile`. Switching an environment between the two SKUs is a `sku_name` change plus the

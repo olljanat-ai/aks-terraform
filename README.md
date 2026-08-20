@@ -55,12 +55,14 @@ state key instead - uncomment and configure `backend "azurerm"` in `terraform.tf
 
 Adding an environment means adding a variables file; nothing else changes.
 
-The configuration can be checked without an Azure subscription at all:
+The configuration can be checked without an Azure subscription at all, which is exactly what CI
+runs on every pull request:
 
 ```sh
 terraform fmt -check -recursive
 terraform validate
 terraform test
+tflint --init && tflint
 ```
 
 Because the cluster is private, `az aks get-credentials` produces a kubeconfig that only resolves

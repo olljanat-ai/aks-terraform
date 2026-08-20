@@ -223,6 +223,27 @@ DESCRIPTION
   }
 }
 
+variable "network_role_assignment_scope" {
+  type        = string
+  default     = "subnet"
+  description = <<DESCRIPTION
+Scope of the `Network Contributor` assignment the cluster identity gets on the existing network.
+
+- `subnet` - One assignment per subnet the cluster actually uses. This is the least privilege that
+  AKS documents for a bring-your-own network, and the default.
+- `virtual_network` - A single assignment on the whole virtual network. Needed only when the cluster
+  has to reach network resources outside its own subnets.
+
+Ignored when `create_role_assignments = false`.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = contains(["subnet", "virtual_network"], var.network_role_assignment_scope)
+    error_message = "network_role_assignment_scope must be either \"subnet\" or \"virtual_network\"."
+  }
+}
+
 variable "network_profile" {
   type = object({
     network_plugin      = optional(string, "azure")

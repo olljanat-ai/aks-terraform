@@ -61,14 +61,24 @@ resource "azurerm_user_assigned_identity" "this" {
   resource_group_name = var.resource_group_name
 }
 
-# Lets the cluster join nodes and load balancers to the existing virtual network.
+# Lets the cluster join nodes, load balancers and the integrated API server to the existing network.
+# Scoped to the subnets the cluster uses rather than the whole virtual network, unless
+# network_role_assignment_scope says otherwise.
 resource "azurerm_role_assignment" "network_contributor" {
-  count = var.create_role_assignments ? 1 : 0
+  for_each = local.network_role_assignment_scopes
 
   principal_id                     = azurerm_user_assigned_identity.this.principal_id
-  scope                            = data.azurerm_virtual_network.this.id
+  scope                            = each.value
   role_definition_name             = "Network Contributor"
   skip_service_principal_aad_check = true
+}
+
+# Clusters created before the assignment was scoped down keep the virtual network wide one when they
+# ask for it, instead of dropping and recreating it. With the default subnet scope the wide
+# assignment is replaced by the narrow ones, which is the point of the change.
+moved {
+  from = azurerm_role_assignment.network_contributor[0]
+  to   = azurerm_role_assignment.network_contributor["virtual_network"]
 }
 
 # Lets the cluster register the API server record in the existing private DNS zone.

@@ -1,0 +1,17 @@
+# Shared remote state. Copy to backend.hcl, fill in your own storage account, and initialize with:
+#
+#   terraform init -backend-config=backend.hcl -backend-config="key=prototype-free.tfstate"
+#
+# The key is deliberately left out of this file: one root module serves every environment, so each
+# environment needs a state file of its own and passing the key per init is what keeps them apart.
+# The azurerm backend takes a blob lease for the duration of an apply, so two people cannot write
+# the same state at once. Enable versioning and soft delete on the container as well - a corrupted
+# or truncated state is only recoverable if an earlier version survives.
+
+resource_group_name  = "rg-terraform-state"
+storage_account_name = "stterraformstate"
+container_name       = "tfstate"
+
+# Entra ID rather than a storage account key, so that no shared secret is needed. In CI, add
+# use_oidc = true and drop the az login.
+use_azuread_auth = true

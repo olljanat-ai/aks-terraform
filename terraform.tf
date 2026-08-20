@@ -12,7 +12,8 @@ terraform {
     }
   }
 
-  # Prototype environments keep state locally. Add a backend block here to share state.
+  # One root module serves every environment, so each one needs its own state. Locally that is a
+  # workspace per environment; with a shared backend, give each environment its own state key.
   # backend "azurerm" {}
 }
 

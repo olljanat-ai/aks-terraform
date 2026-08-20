@@ -170,6 +170,27 @@ run "upgrade_windows_cover_all_three_schedules_and_send_no_start_date" {
   }
 }
 
+run "warns_about_a_public_api_server_without_an_allowlist" {
+  command = plan
+
+  variables {
+    private_cluster_enabled = false
+  }
+
+  # In a real plan the check reports a warning; `terraform test` treats it as a failure, which is
+  # what pins the warning down as still being raised.
+  expect_failures = [check.api_server_exposure]
+}
+
+run "an_allowlisted_public_api_server_raises_nothing" {
+  command = plan
+
+  variables {
+    private_cluster_enabled         = false
+    api_server_authorized_ip_ranges = ["203.0.113.0/24"]
+  }
+}
+
 # ----------------------------------------------------------------------------------------------
 # Input validation
 # ----------------------------------------------------------------------------------------------

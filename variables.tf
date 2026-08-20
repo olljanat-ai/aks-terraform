@@ -167,11 +167,24 @@ variable "default_node_pool" {
     max_pods            = optional(number)
     os_disk_size_gb     = optional(number)
     availability_zones  = optional(list(string))
+
+    max_surge                  = optional(string, "10%")
+    drain_timeout_minutes      = optional(number)
+    node_soak_duration_minutes = optional(number)
   })
   default     = {}
   description = <<DESCRIPTION
 System node pool of the cluster. An AKS Automatic cluster keeps only `name` and `node_count` and
 provisions nodes on demand from there on, so the rest is dropped for that SKU.
+
+The last three govern how the pool is rolled during an upgrade:
+
+- `max_surge` - Extra capacity added while upgrading, as a node count or a percentage of the pool.
+  AKS itself defaults to a single node, which upgrades a large pool one node at a time.
+- `drain_timeout_minutes` - How long to wait for a node to drain before moving on. Defaults to the
+  AKS default of 30 minutes. A pod with a restrictive disruption budget can hold a node here.
+- `node_soak_duration_minutes` - How long to wait after a node comes back before draining the next
+  one. Defaults to the AKS default of no wait.
 DESCRIPTION
   nullable    = false
 
@@ -198,6 +211,18 @@ DESCRIPTION
   validation {
     condition     = var.default_node_pool.max_pods == null || try(var.default_node_pool.max_pods >= 10, false)
     error_message = "default_node_pool.max_pods must be at least 10."
+  }
+  validation {
+    condition     = can(regex("^[1-9][0-9]*%?$", var.default_node_pool.max_surge))
+    error_message = "default_node_pool.max_surge must be a node count or a percentage, for example \"2\" or \"10%\"."
+  }
+  validation {
+    condition     = var.default_node_pool.drain_timeout_minutes == null || try(var.default_node_pool.drain_timeout_minutes >= 1 && var.default_node_pool.drain_timeout_minutes <= 1440, false)
+    error_message = "default_node_pool.drain_timeout_minutes must be between 1 and 1440."
+  }
+  validation {
+    condition     = var.default_node_pool.node_soak_duration_minutes == null || try(var.default_node_pool.node_soak_duration_minutes >= 0 && var.default_node_pool.node_soak_duration_minutes <= 30, false)
+    error_message = "default_node_pool.node_soak_duration_minutes must be between 0 and 30."
   }
 }
 

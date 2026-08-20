@@ -136,6 +136,24 @@ reported on. AKS Automatic always runs it.
 
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
 
+## Node pool upgrades
+
+Node image patching and Kubernetes upgrades roll the system pool one node at a time by default,
+which is slow on anything but a small pool. `default_node_pool` controls the roll:
+
+```hcl
+default_node_pool = {
+  max_surge                  = "33%"
+  drain_timeout_minutes      = 30
+  node_soak_duration_minutes = 5
+}
+```
+
+`max_surge` is the extra capacity added while upgrading, so the subscription needs quota for it.
+`drain_timeout_minutes` bounds how long a node is allowed to take to drain - a pod with a
+restrictive disruption budget can otherwise hold the upgrade indefinitely - and
+`node_soak_duration_minutes` waits after each node comes back before the next one is drained.
+
 ## Public clusters
 
 `private_cluster_enabled` defaults to `true`. Set it to `false` in the variables file for a public

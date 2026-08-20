@@ -135,8 +135,16 @@ module "aks" {
     name                = var.default_node_pool.name
     os_disk_size_gb     = var.default_node_pool.os_disk_size_gb
     type                = "VirtualMachineScaleSets"
-    vm_size             = var.default_node_pool.vm_size
-    vnet_subnet_id      = data.azurerm_subnet.node.id
+    # How the pool is rolled during an upgrade. These belong to the pool: the cluster level
+    # upgrade_settings of the module only carries the force-upgrade override, and silently drops
+    # anything else, because Terraform discards object attributes a type constraint does not declare.
+    upgrade_settings = {
+      drain_timeout_in_minutes      = var.default_node_pool.drain_timeout_minutes
+      max_surge                     = var.default_node_pool.max_surge
+      node_soak_duration_in_minutes = var.default_node_pool.node_soak_duration_minutes
+    }
+    vm_size        = var.default_node_pool.vm_size
+    vnet_subnet_id = data.azurerm_subnet.node.id
   }
   # Gatekeeper, so that Azure Policy definitions are actually enforced inside the cluster.
   addon_profile_azure_policy = {
@@ -211,12 +219,6 @@ module "aks" {
     node_os_upgrade_channel = "NodeImage"
     upgrade_channel         = "stable"
   }
-  upgrade_settings = {
-    drain_timeout_in_minutes      = 0
-    max_surge                     = "10%"
-    node_soak_duration_in_minutes = 0
-  }
-
   depends_on = [
     azurerm_role_assignment.network_contributor,
     azurerm_role_assignment.private_dns_zone_contributor,

@@ -240,6 +240,24 @@ variable "kubernetes_version" {
   }
 }
 
+variable "lock_kind" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Management lock placed on the cluster, or null for none.
+
+- `CanNotDelete` - The cluster cannot be deleted, by Terraform or from the portal, until the lock is
+  removed. Worth having on anything that would take an outage to rebuild.
+- `ReadOnly` - Nothing about the cluster can be changed either. This also blocks the upgrades AKS
+  runs on its own, so it is rarely what you want.
+DESCRIPTION
+
+  validation {
+    condition     = var.lock_kind == null || contains(["CanNotDelete", "ReadOnly"], coalesce(var.lock_kind, ""))
+    error_message = "lock_kind must be either \"CanNotDelete\" or \"ReadOnly\", or left unset."
+  }
+}
+
 variable "maintenance_window" {
   type = object({
     day_of_week    = optional(string, "Tuesday")

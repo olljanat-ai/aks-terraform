@@ -50,8 +50,19 @@ terraform apply -var-file=environments/prototype-free.tfvars
 ```
 
 One root module serves every environment, so **each environment needs its own state**. Locally that
-is one workspace per environment, as above. With a shared backend, give each environment its own
-state key instead - uncomment and configure `backend "azurerm"` in `terraform.tf`.
+is one workspace per environment, as above.
+
+Anything beyond a prototype belongs in remote state: local state is not shared, not locked and not
+backed up. Uncomment `backend "azurerm"` in `terraform.tf`, copy `backend.hcl.example` to
+`backend.hcl`, and give each environment its own key:
+
+```sh
+terraform init -backend-config=backend.hcl -backend-config="key=prototype-free.tfstate"
+```
+
+The backend holds a blob lease for the duration of an apply, so two people cannot write the same
+state at once. Turn on versioning and soft delete for the container too - a truncated state file is
+only recoverable if an earlier version survives.
 
 Adding an environment means adding a variables file; nothing else changes.
 

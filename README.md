@@ -16,6 +16,7 @@ and a private DNS zone - and are **private by default**.
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, and wires up private or public API server access. |
 | `environments/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
+| `tests/aks.tftest.hcl` | `terraform test` suite. Providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
 | `environments/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades. Runs on the Standard tier, which Automatic requires. |
 
 [module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
@@ -53,6 +54,14 @@ is one workspace per environment, as above. With a shared backend, give each env
 state key instead - uncomment and configure `backend "azurerm"` in `terraform.tf`.
 
 Adding an environment means adding a variables file; nothing else changes.
+
+The configuration can be checked without an Azure subscription at all:
+
+```sh
+terraform fmt -check -recursive
+terraform validate
+terraform test
+```
 
 Because the cluster is private, `az aks get-credentials` produces a kubeconfig that only resolves
 from inside the virtual network or from a network that can reach it:

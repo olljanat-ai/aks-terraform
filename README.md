@@ -113,6 +113,10 @@ A public cluster does not use the private DNS zone, so `private_dns_zone_name` c
   deleting them, and that update alone would make Terraform re-read every computed cluster
   attribute, showing `fqdn`, `node_resource_group_name` and `oidc_issuer_url` as
   `(known after apply)` on an unchanged cluster.
+- The **upgrade windows** are `azapi_resource` blocks in `main.tf` rather than module arguments. The
+  module always sends a `startDate`, Azure answers with the date the window was created, and that
+  difference shows up as an update in every later plan. Terraform can leave the property alone only
+  by not mentioning it.
 - AKS Automatic ignores most cluster settings on purpose, which is why both SKUs share one set of
   variables: the AVM module drops everything Automatic does not accept from `default_node_pool` and
   `network_profile`. Switching an environment between the two SKUs is a `sku_name` change plus the

@@ -137,6 +137,12 @@ module "aks" {
   tags = local.cluster_tags
 
   disable_local_accounts = true
+  # Workload identity federates Kubernetes service accounts with Entra ID, which only works when the
+  # cluster publishes an OIDC issuer. Azure rejects the one without the other, and the
+  # `oidc_issuer_url` output stays null until the issuer is on.
+  oidc_issuer_profile = {
+    enabled = true
+  }
   security_profile = {
     image_cleaner = {
       enabled        = true

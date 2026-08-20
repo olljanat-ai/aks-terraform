@@ -17,6 +17,7 @@ concurrency:
 env:
   # Keep in step with the lower bound of required_version in terraform.tf.
   TERRAFORM_VERSION: "1.14.4"
+  TF_IN_AUTOMATION: "true"
 
 jobs:
   validate:
@@ -50,9 +51,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: terraform-linters/setup-tflint@v6
-        with:
-          tflint_version: v0.60.0
+      # Installed from the pinned release rather than through an action, so that the version in the
+      # workflow is the version that runs.
+      - name: Install tflint
+        env:
+          TFLINT_VERSION: v0.60.0
+        run: |
+          curl --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/tflint.zip" \
+            "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip"
+          unzip -o "${RUNNER_TEMP}/tflint.zip" -d "${RUNNER_TEMP}/tflint"
+          echo "${RUNNER_TEMP}/tflint" >> "${GITHUB_PATH}"
 
       - name: Install the rulesets pinned in .tflint.hcl
         run: tflint --init

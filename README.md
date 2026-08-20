@@ -106,6 +106,9 @@ A public cluster does not use the private DNS zone, so `private_dns_zone_name` c
 - **Workload identity** is on, together with the **OIDC issuer** it requires. Federate a Kubernetes
   service account with an Entra ID application against the `oidc_issuer_url` output instead of
   storing credentials in the cluster.
+- Terraform **waits after creating the role assignments** before creating the cluster, because Azure
+  RBAC is eventually consistent and the cluster is otherwise regularly refused access to the subnet
+  it is supposed to join. Tune or disable the wait with `role_assignment_propagation_delay`.
 - The cluster identity gets `Network Contributor` **on the subnets it uses**, not on the whole
   virtual network - the least privilege AKS documents for a bring-your-own network. Set
   `network_role_assignment_scope = "virtual_network"` for the wider grant when the cluster has to

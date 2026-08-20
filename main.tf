@@ -91,6 +91,19 @@ resource "azurerm_role_assignment" "private_dns_zone_contributor" {
   skip_service_principal_aad_check = true
 }
 
+# Azure RBAC is eventually consistent: an assignment can be returned as created and still not be in
+# effect when the cluster is created seconds later, which fails the apply with an authorization error
+# on the subnet. Waiting once on creation is cheaper than a half-created cluster.
+resource "time_sleep" "role_assignment_propagation" {
+  count = var.create_role_assignments && var.role_assignment_propagation_delay != "0s" ? 1 : 0
+
+  create_duration = var.role_assignment_propagation_delay
+  triggers = {
+    network_contributor          = join(",", [for assignment in azurerm_role_assignment.network_contributor : assignment.id])
+    private_dns_zone_contributor = join(",", azurerm_role_assignment.private_dns_zone_contributor[*].id)
+  }
+}
+
 module "aks" {
   source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
   version = "0.8.1"
@@ -176,6 +189,7 @@ module "aks" {
   depends_on = [
     azurerm_role_assignment.network_contributor,
     azurerm_role_assignment.private_dns_zone_contributor,
+    time_sleep.role_assignment_propagation,
   ]
 }
 

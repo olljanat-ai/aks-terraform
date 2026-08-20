@@ -151,7 +151,6 @@ module "aks" {
     node_os_upgrade_channel = "NodeImage"
     upgrade_channel         = "stable"
   }
-  maintenanceconfiguration = local.maintenance_configurations
   upgrade_settings = {
     drain_timeout_in_minutes      = 0
     max_surge                     = "10%"
@@ -162,4 +161,58 @@ module "aks" {
     azurerm_role_assignment.network_contributor,
     azurerm_role_assignment.private_dns_zone_contributor,
   ]
+}
+
+# The upgrade windows. Azure fixes the three names: `default` covers the weekly AKS release of the
+# control plane and add-ons, `aksManagedAutoUpgradeSchedule` the Kubernetes version upgrade driven by
+# `upgrade_channel`, and `aksManagedNodeOSUpgradeSchedule` the node image patching driven by
+# `node_os_upgrade_channel`. The windows are identical and therefore overlap, which is allowed - AKS
+# picks the order it runs them in.
+#
+# These are written directly instead of through the module, because the module always sends a
+# `startDate` - null when it is not set - while Azure answers with the date the configuration was
+# created. That difference turns up as an update in every subsequent plan, and Azure rejects a
+# request carrying a startDate that has since fallen into the past, so the value cannot simply be
+# pinned either. AzAPI only tracks the properties the body declares, so leaving startDate out keeps
+# it entirely server-side: the window activates immediately, which is what an unset startDate means.
+resource "azapi_resource" "maintenance_configuration" {
+  for_each = toset(["aksManagedAutoUpgradeSchedule", "aksManagedNodeOSUpgradeSchedule", "default"])
+
+  name      = each.key
+  parent_id = module.aks.resource_id
+  type      = "Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2026-03-01"
+  body = {
+    properties = {
+      maintenanceWindow = {
+        durationHours = var.maintenance_window.duration_hours
+        schedule = {
+          weekly = {
+            dayOfWeek     = var.maintenance_window.day_of_week
+            intervalWeeks = var.maintenance_window.interval_weeks
+          }
+        }
+        startTime = var.maintenance_window.start_time
+        utcOffset = var.maintenance_window.utc_offset
+      }
+    }
+  }
+  # AzAPI's embedded AKS schema does not cover 2026-03-01 yet. Azure still validates the request.
+  schema_validation_enabled = false
+}
+
+# Clusters that already ran the module-managed configurations keep them, rather than having their
+# upgrade windows deleted and recreated. Safe to drop once every environment has applied this.
+moved {
+  from = module.aks.module.maintenanceconfiguration["aksManagedAutoUpgradeSchedule"].azapi_resource.this
+  to   = azapi_resource.maintenance_configuration["aksManagedAutoUpgradeSchedule"]
+}
+
+moved {
+  from = module.aks.module.maintenanceconfiguration["aksManagedNodeOSUpgradeSchedule"].azapi_resource.this
+  to   = azapi_resource.maintenance_configuration["aksManagedNodeOSUpgradeSchedule"]
+}
+
+moved {
+  from = module.aks.module.maintenanceconfiguration["default"].azapi_resource.this
+  to   = azapi_resource.maintenance_configuration["default"]
 }

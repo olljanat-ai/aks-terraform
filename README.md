@@ -16,8 +16,10 @@ and a private DNS zone - and are **private by default**.
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, and wires up private or public API server access. |
 | `environments/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
-| `tests/aks.tftest.hcl` | `terraform test` suite. Providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
 | `environments/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades. Runs on the Standard tier, which Automatic requires. |
+| `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
+| `backend.hcl.example` | Template for the shared remote state backend. |
+| `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, and the Dependabot schedule that watches the pinned module and provider versions. |
 
 [module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
 
@@ -50,7 +52,8 @@ terraform apply -var-file=environments/prototype-free.tfvars
 ```
 
 One root module serves every environment, so **each environment needs its own state**. Locally that
-is one workspace per environment, as above.
+is one workspace per environment, as above. Adding an environment means adding a variables file;
+nothing else changes.
 
 Anything beyond a prototype belongs in remote state: local state is not shared, not locked and not
 backed up. Uncomment `backend "azurerm"` in `terraform.tf`, copy `backend.hcl.example` to
@@ -63,8 +66,6 @@ terraform init -backend-config=backend.hcl -backend-config="key=prototype-free.t
 The backend holds a blob lease for the duration of an apply, so two people cannot write the same
 state at once. Turn on versioning and soft delete for the container too - a truncated state file is
 only recoverable if an earlier version survives.
-
-Adding an environment means adding a variables file; nothing else changes.
 
 The configuration can be checked without an Azure subscription at all, which is exactly what CI
 runs on every pull request:
@@ -111,11 +112,6 @@ together with the weekly AKS release of the control plane and add-ons, are confi
 weekly [planned maintenance][maintenance] window. It defaults to the night between Tuesday and
 Wednesday, 22:00 - 06:00 UTC.
 
-Pinning `kubernetes_version` and letting a channel move past it are mutually exclusive, and
-Terraform refuses the combination: AKS would upgrade the cluster, the next apply would write the
-pinned version back, and Azure rejects a downgrade. Pin the version and set
-`auto_upgrade = { kubernetes_channel = "none" }`, or pin only the minor version and use `"patch"`.
-
 Change it per environment in the variables file:
 
 ```hcl
@@ -134,6 +130,11 @@ The window must be at least four hours long, or AKS does not attempt an upgrade 
 *starts* work inside it: an upgrade still running when the window closes is allowed to finish, but
 nothing new begins. Windows are best effort - AKS reserves the right to break them for urgent,
 unplanned maintenance.
+
+Pinning `kubernetes_version` and letting a channel move past it are mutually exclusive, and
+Terraform refuses the combination: AKS would upgrade the cluster, the next apply would write the
+pinned version back, and Azure rejects a downgrade. Pin the version and set
+`auto_upgrade = { kubernetes_channel = "none" }`, or pin only the minor version and use `"patch"`.
 
 [maintenance]: https://learn.microsoft.com/azure/aks/planned-maintenance
 

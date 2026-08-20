@@ -150,6 +150,9 @@ A public cluster does not use the private DNS zone, so `private_dns_zone_name` c
 
 ## Notes
 
+- `lock_kind = "CanNotDelete"` puts a **management lock** on the cluster, so that neither Terraform
+  nor a portal click can delete it. Terraform can still change it; removing the lock is a separate,
+  deliberate step. Note that `ReadOnly` also blocks the upgrades AKS runs on its own.
 - **Workload identity** is on, together with the **OIDC issuer** it requires. Federate a Kubernetes
   service account with an Entra ID application against the `oidc_issuer_url` output instead of
   storing credentials in the cluster.

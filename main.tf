@@ -170,6 +170,9 @@ module "aks" {
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
   kubernetes_version = var.kubernetes_version
+  lock = var.lock_kind == null ? null : {
+    kind = var.lock_kind
+  }
   managed_identities = {
     system_assigned            = false
     user_assigned_resource_ids = [azurerm_user_assigned_identity.this.id]

@@ -2,30 +2,55 @@ variable "location" {
   type        = string
   description = "Azure region of the cluster. Must match the region of the existing virtual network."
   nullable    = false
+
+  validation {
+    condition     = length(trimspace(var.location)) > 0
+    error_message = "location must not be empty."
+  }
 }
 
 variable "name" {
   type        = string
   description = "Name of the AKS cluster."
   nullable    = false
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9][a-zA-Z0-9_-]{0,61}[a-zA-Z0-9]$", var.name))
+    error_message = "name must be 2 to 63 characters of letters, digits, underscores and hyphens, starting and ending with a letter or digit."
+  }
 }
 
 variable "node_subnet_name" {
   type        = string
   description = "Name of the existing subnet the cluster nodes are placed in."
   nullable    = false
+
+  validation {
+    condition     = length(trimspace(var.node_subnet_name)) > 0
+    error_message = "node_subnet_name must not be empty."
+  }
 }
 
 variable "resource_group_name" {
   type        = string
   description = "Name of the existing resource group the cluster is deployed into."
   nullable    = false
+
+  validation {
+    condition     = length(trimspace(var.resource_group_name)) > 0
+    error_message = "resource_group_name must not be empty."
+  }
 }
 
 variable "virtual_network_name" {
   type        = string
   description = "Name of the existing virtual network the cluster is attached to."
   nullable    = false
+
+  validation {
+    condition     = length(trimspace(var.virtual_network_name)) > 0
+    error_message = "virtual_network_name must not be empty."
+  }
 }
 
 variable "api_server_authorized_ip_ranges" {
@@ -36,6 +61,11 @@ CIDR ranges allowed to reach the API server. Only meaningful for a public cluste
 (`private_cluster_enabled = false`); an empty list leaves the API server open to the internet.
 DESCRIPTION
   nullable    = false
+
+  validation {
+    condition     = alltrue([for range in var.api_server_authorized_ip_ranges : can(cidrhost(range, 0))])
+    error_message = "api_server_authorized_ip_ranges must contain CIDR ranges, for example \"203.0.113.0/24\"."
+  }
 }
 
 variable "api_server_subnet_name" {
@@ -81,6 +111,31 @@ System node pool of the cluster. An AKS Automatic cluster keeps only `name` and 
 provisions nodes on demand from there on, so the rest is dropped for that SKU.
 DESCRIPTION
   nullable    = false
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]{0,11}$", var.default_node_pool.name))
+    error_message = "default_node_pool.name must be 1 to 12 lowercase letters and digits, starting with a letter."
+  }
+  validation {
+    condition     = var.default_node_pool.node_count >= 1
+    error_message = "default_node_pool.node_count must be at least 1. A system pool cannot be empty."
+  }
+  validation {
+    condition     = !var.default_node_pool.enable_auto_scaling || var.default_node_pool.min_count <= var.default_node_pool.max_count
+    error_message = "default_node_pool.min_count must not exceed default_node_pool.max_count."
+  }
+  validation {
+    condition     = !var.default_node_pool.enable_auto_scaling || (var.default_node_pool.node_count >= var.default_node_pool.min_count && var.default_node_pool.node_count <= var.default_node_pool.max_count)
+    error_message = "default_node_pool.node_count must be between min_count and max_count while autoscaling is enabled."
+  }
+  validation {
+    condition     = var.default_node_pool.os_disk_size_gb == null || try(var.default_node_pool.os_disk_size_gb >= 30, false)
+    error_message = "default_node_pool.os_disk_size_gb must be at least 30."
+  }
+  validation {
+    condition     = var.default_node_pool.max_pods == null || try(var.default_node_pool.max_pods >= 10, false)
+    error_message = "default_node_pool.max_pods must be at least 10."
+  }
 }
 
 variable "enable_telemetry" {
@@ -95,6 +150,11 @@ variable "entra_admin_group_object_ids" {
   default     = []
   description = "Object IDs of the Microsoft Entra ID groups granted cluster admin."
   nullable    = false
+
+  validation {
+    condition     = alltrue([for id in var.entra_admin_group_object_ids : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", id))])
+    error_message = "entra_admin_group_object_ids must contain group object IDs as GUIDs, not group names."
+  }
 }
 
 variable "fqdn_subdomain" {
@@ -110,6 +170,11 @@ variable "kubernetes_version" {
   type        = string
   default     = null
   description = "Kubernetes minor version, for example `1.32`. Defaults to the AKS default version."
+
+  validation {
+    condition     = var.kubernetes_version == null || can(regex("^[0-9]+\\.[0-9]+(\\.[0-9]+)?$", var.kubernetes_version))
+    error_message = "kubernetes_version must be of the form 1.32 or 1.32.4, without a leading \"v\"."
+  }
 }
 
 variable "maintenance_window" {
@@ -180,6 +245,50 @@ which also avoids creating a public load balancer.
 An AKS Automatic cluster manages its own dataplane, so only `outbound_type` survives for that SKU.
 DESCRIPTION
   nullable    = false
+
+  validation {
+    condition     = contains(["azure", "kubenet", "none"], var.network_profile.network_plugin)
+    error_message = "network_profile.network_plugin must be one of \"azure\", \"kubenet\" or \"none\"."
+  }
+  validation {
+    condition     = contains(["azure", "calico", "cilium", "none"], var.network_profile.network_policy)
+    error_message = "network_profile.network_policy must be one of \"azure\", \"calico\", \"cilium\" or \"none\"."
+  }
+  validation {
+    condition     = contains(["azure", "cilium"], var.network_profile.network_dataplane)
+    error_message = "network_profile.network_dataplane must be either \"azure\" or \"cilium\"."
+  }
+  validation {
+    condition     = var.network_profile.network_policy != "cilium" || var.network_profile.network_dataplane == "cilium"
+    error_message = "network_profile.network_policy = \"cilium\" requires network_dataplane = \"cilium\"."
+  }
+  validation {
+    condition     = contains(["loadBalancer", "managedNATGateway", "userAssignedNATGateway", "userDefinedRouting"], var.network_profile.outbound_type)
+    error_message = "network_profile.outbound_type must be one of \"loadBalancer\", \"managedNATGateway\", \"userAssignedNATGateway\" or \"userDefinedRouting\"."
+  }
+  validation {
+    condition     = var.network_profile.load_balancer_sku == null || contains(["basic", "standard"], coalesce(var.network_profile.load_balancer_sku, "standard"))
+    error_message = "network_profile.load_balancer_sku must be either \"basic\" or \"standard\"."
+  }
+  validation {
+    condition     = alltrue([for cidr in [var.network_profile.pod_cidr, var.network_profile.service_cidr] : can(cidrhost(cidr, 0))])
+    error_message = "network_profile.pod_cidr and network_profile.service_cidr must be CIDR ranges, for example \"100.202.0.0/16\"."
+  }
+  validation {
+    condition     = can(cidrhost("${var.network_profile.dns_service_ip}/32", 0))
+    error_message = "network_profile.dns_service_ip must be an IPv4 address."
+  }
+  validation {
+    condition = try(
+      cidrhost("${var.network_profile.dns_service_ip}/${split("/", var.network_profile.service_cidr)[1]}", 0) == cidrhost(var.network_profile.service_cidr, 0),
+      false
+    )
+    error_message = "network_profile.dns_service_ip must fall inside network_profile.service_cidr."
+  }
+  validation {
+    condition     = try(cidrhost(var.network_profile.pod_cidr, 0) != cidrhost(var.network_profile.service_cidr, 0), false)
+    error_message = "network_profile.pod_cidr and network_profile.service_cidr must not be the same range."
+  }
 }
 
 variable "private_cluster_enabled" {
@@ -203,6 +312,11 @@ variable "private_dns_zone_name" {
 Name of the existing private DNS zone for the API server, for example
 `privatelink.swedencentral.azmk8s.io`. When left null a private cluster uses an AKS-managed zone.
 DESCRIPTION
+
+  validation {
+    condition     = var.private_dns_zone_name == null || can(regex("\\.azmk8s\\.io$", coalesce(var.private_dns_zone_name, "")))
+    error_message = "private_dns_zone_name must end in .azmk8s.io, for example \"privatelink.swedencentral.azmk8s.io\"."
+  }
 }
 
 variable "private_dns_zone_resource_group_name" {
@@ -243,6 +357,11 @@ variable "subscription_id" {
   type        = string
   default     = null
   description = "Target subscription. Falls back to `ARM_SUBSCRIPTION_ID` or the current Azure CLI subscription."
+
+  validation {
+    condition     = var.subscription_id == null || can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", coalesce(var.subscription_id, "")))
+    error_message = "subscription_id must be a GUID."
+  }
 }
 
 variable "system_node_subnet_name" {

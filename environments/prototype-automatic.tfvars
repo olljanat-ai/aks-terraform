@@ -44,4 +44,7 @@ entra_admin_group_object_ids = []
 # Automatic keeps only the initial size and provisions nodes on demand from there on.
 default_node_pool = {
   node_count = 3
+
+  # Spread the pool across availability zones in a region that has them. Only settable at creation.
+  # availability_zones = ["1", "2", "3"]
 }

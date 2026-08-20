@@ -41,4 +41,7 @@ default_node_pool = {
   vm_size   = "Standard_D4ds_v5"
   min_count = 2
   max_count = 4
+
+  # Spread the pool across availability zones in a region that has them. Only settable at creation.
+  # availability_zones = ["1", "2", "3"]
 }

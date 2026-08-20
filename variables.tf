@@ -43,8 +43,13 @@ variable "api_server_subnet_name" {
   default     = null
   description = <<DESCRIPTION
 Name of the existing subnet used for API Server VNet Integration. The subnet must be delegated to
-`Microsoft.ContainerService/managedClusters`. Required for AKS Automatic on a bring-your-own network.
+`Microsoft.ContainerService/managedClusters`. Required for AKS Automatic.
 DESCRIPTION
+
+  validation {
+    condition     = var.sku_name != "Automatic" || var.api_server_subnet_name != null
+    error_message = "AKS Automatic on an existing network requires api_server_subnet_name."
+  }
 }
 
 variable "create_role_assignments" {
@@ -72,8 +77,8 @@ variable "default_node_pool" {
   })
   default     = {}
   description = <<DESCRIPTION
-System node pool of the cluster. Ignored for AKS Automatic clusters apart from `name` and
-`node_count`, because Automatic manages its own node pools through node auto-provisioning.
+System node pool of the cluster. An AKS Automatic cluster keeps only `name` and `node_count` and
+provisions nodes on demand from there on, so the rest is dropped for that SKU.
 DESCRIPTION
   nullable    = false
 }
@@ -109,20 +114,24 @@ variable "kubernetes_version" {
 
 variable "network_profile" {
   type = object({
-    network_plugin      = optional(string)
-    network_plugin_mode = optional(string)
-    network_policy      = optional(string)
-    network_dataplane   = optional(string)
+    network_plugin      = optional(string, "azure")
+    network_plugin_mode = optional(string, "overlay")
+    network_policy      = optional(string, "cilium")
+    network_dataplane   = optional(string, "cilium")
     load_balancer_sku   = optional(string)
-    outbound_type       = optional(string)
-    pod_cidr            = optional(string)
-    service_cidr        = optional(string)
-    dns_service_ip      = optional(string)
+    outbound_type       = optional(string, "loadBalancer")
+    pod_cidr            = optional(string, "100.64.0.0/16")
+    service_cidr        = optional(string, "10.100.0.0/16")
+    dns_service_ip      = optional(string, "10.100.0.10")
   })
   default     = {}
   description = <<DESCRIPTION
 Cluster network configuration. `service_cidr`, `pod_cidr` and `dns_service_ip` are cluster-internal
-ranges and must not overlap with the address space of the existing virtual network.
+ranges and must not overlap with the address space of the existing virtual network. Use
+`outbound_type = "userDefinedRouting"` when the existing subnet routes egress through a firewall,
+which also avoids creating a public load balancer.
+
+An AKS Automatic cluster manages its own dataplane, so only `outbound_type` survives for that SKU.
 DESCRIPTION
   nullable    = false
 }
@@ -184,13 +193,24 @@ variable "sku_tier" {
   }
 }
 
+variable "subscription_id" {
+  type        = string
+  default     = null
+  description = "Target subscription. Falls back to `ARM_SUBSCRIPTION_ID` or the current Azure CLI subscription."
+}
+
 variable "system_node_subnet_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
 Name of the existing subnet used by the hosted system components of an AKS Automatic cluster.
-Required for AKS Automatic on a bring-your-own network, ignored otherwise.
+Required for AKS Automatic, ignored otherwise.
 DESCRIPTION
+
+  validation {
+    condition     = var.sku_name != "Automatic" || var.system_node_subnet_name != null
+    error_message = "AKS Automatic on an existing network requires system_node_subnet_name."
+  }
 }
 
 variable "tags" {

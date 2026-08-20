@@ -1,6 +1,16 @@
-# Copy to terraform.tfvars and fill in the names of the existing resources.
+# Prototype cluster on the Free tier: one system node pool, Azure CNI overlay with Cilium,
+# no uptime SLA. Private by default.
+#
+#   terraform workspace select -or-create prototype-free
+#   terraform apply -var-file=environments/prototype-free.tfvars
 
-location            = "swedencentral"
+name     = "aks-prototype-free"
+location = "swedencentral"
+
+sku_name = "Base"
+sku_tier = "Free"
+
+# Existing resource group.
 resource_group_name = "rg-aks-prototype"
 
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
@@ -18,6 +28,12 @@ private_cluster_enabled = true
 
 entra_admin_group_object_ids = []
 
+default_node_pool = {
+  vm_size   = "Standard_D4ds_v5"
+  min_count = 2
+  max_count = 4
+}
+
 tags = {
-  environment = "prototype"
+  environment = "prototype-free"
 }

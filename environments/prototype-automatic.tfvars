@@ -1,0 +1,42 @@
+# Prototype cluster on the Automatic SKU: Azure manages node provisioning, scaling, networking and
+# upgrades. Automatic requires the Standard tier and API Server VNet Integration. Private by default.
+#
+#   terraform workspace select -or-create prototype-automatic
+#   terraform apply -var-file=environments/prototype-automatic.tfvars
+
+name     = "aks-prototype-automatic"
+location = "swedencentral"
+
+sku_name = "Automatic"
+sku_tier = "Standard"
+
+# Existing resource group.
+resource_group_name = "rg-aks-prototype"
+
+# Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
+virtual_network_name = "vnet-aks-prototype"
+node_subnet_name     = "snet-aks-nodes"
+# Hosted system components of the Automatic cluster.
+system_node_subnet_name = "snet-aks-system"
+# Must be delegated to Microsoft.ContainerService/managedClusters.
+api_server_subnet_name = "snet-aks-apiserver"
+# virtual_network_resource_group_name = "rg-network"
+
+# Existing private DNS zone for the API server.
+private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
+# private_dns_zone_resource_group_name = "rg-network"
+
+# Private by default. Set to false, and optionally restrict the source ranges, for a public cluster.
+private_cluster_enabled = true
+# api_server_authorized_ip_ranges = ["203.0.113.0/24"]
+
+entra_admin_group_object_ids = []
+
+# Automatic keeps only the initial size and provisions nodes on demand from there on.
+default_node_pool = {
+  node_count = 3
+}
+
+tags = {
+  environment = "prototype-automatic"
+}

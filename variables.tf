@@ -312,6 +312,23 @@ DESCRIPTION
   }
 }
 
+variable "role_assignment_propagation_delay" {
+  type        = string
+  default     = "60s"
+  description = <<DESCRIPTION
+How long to wait after creating the role assignments before creating the cluster. Azure RBAC is
+eventually consistent, so a cluster created the moment the assignment returns is regularly refused
+access to the subnet it is supposed to join. Set to `"0s"` to skip the wait, for example when the
+assignments already existed. Ignored when `create_role_assignments = false`.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[0-9]+(ms|s|m|h)$", var.role_assignment_propagation_delay))
+    error_message = "role_assignment_propagation_delay must be a duration such as \"60s\" or \"2m\"."
+  }
+}
+
 variable "private_cluster_enabled" {
   type        = bool
   default     = true

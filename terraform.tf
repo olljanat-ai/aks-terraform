@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = ">= 4.46.0, < 5.0.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.13"
+    }
   }
 
   # One root module serves every environment, so each one needs its own state. Locally that is a

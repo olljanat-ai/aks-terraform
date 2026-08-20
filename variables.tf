@@ -112,6 +112,52 @@ variable "kubernetes_version" {
   description = "Kubernetes minor version, for example `1.32`. Defaults to the AKS default version."
 }
 
+variable "maintenance_window" {
+  type = object({
+    day_of_week    = optional(string, "Tuesday")
+    start_time     = optional(string, "22:00")
+    duration_hours = optional(number, 8)
+    interval_weeks = optional(number, 1)
+    utc_offset     = optional(string, "+00:00")
+  })
+  default     = {}
+  description = <<DESCRIPTION
+Weekly window the cluster is allowed to upgrade itself in. Defaults to the night between Tuesday and
+Wednesday, 22:00 - 06:00 UTC. A window that runs past midnight simply continues into the next day.
+
+- `day_of_week` - Day the window opens on, `Monday` through `Sunday`.
+- `start_time` - Time the window opens as `HH:MM`, in the time zone given by `utc_offset`.
+- `duration_hours` - Length of the window. Azure allows 4 to 24 hours, and needs at least 4 for an
+  upgrade to be attempted at all.
+- `interval_weeks` - Weeks between windows. `1` opens one every week.
+- `utc_offset` - Time zone of `start_time` as `+/-HH:MM`, for example `+03:00` for Finnish summer
+  time. Note that Azure does not follow daylight saving time, so a fixed offset shifts by an hour
+  relative to local time for part of the year.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = contains(["Friday", "Monday", "Saturday", "Sunday", "Thursday", "Tuesday", "Wednesday"], var.maintenance_window.day_of_week)
+    error_message = "maintenance_window.day_of_week must be an English weekday name, for example \"Tuesday\"."
+  }
+  validation {
+    condition     = can(regex("^([01][0-9]|2[0-3]):[0-5][0-9]$", var.maintenance_window.start_time))
+    error_message = "maintenance_window.start_time must be of the form HH:MM, between \"00:00\" and \"23:59\"."
+  }
+  validation {
+    condition     = var.maintenance_window.duration_hours >= 4 && var.maintenance_window.duration_hours <= 24
+    error_message = "maintenance_window.duration_hours must be between 4 and 24."
+  }
+  validation {
+    condition     = var.maintenance_window.interval_weeks >= 1
+    error_message = "maintenance_window.interval_weeks must be at least 1."
+  }
+  validation {
+    condition     = can(regex("^[-+][0-9]{2}:[0-9]{2}$", var.maintenance_window.utc_offset))
+    error_message = "maintenance_window.utc_offset must be of the form +HH:MM or -HH:MM."
+  }
+}
+
 variable "network_profile" {
   type = object({
     network_plugin      = optional(string, "azure")

@@ -61,6 +61,34 @@ from inside the virtual network or from a network that can reach it:
 az aks get-credentials --resource-group <resource_group_name> --name "$(terraform output -raw name)"
 ```
 
+## Upgrade window
+
+The cluster upgrades itself - the `stable` channel for the Kubernetes version, the `NodeImage`
+channel for node OS patching. Those upgrades, together with the weekly AKS release of the control
+plane and add-ons, are confined to a single weekly [planned maintenance][maintenance] window. It
+defaults to the night between Tuesday and Wednesday, 22:00 - 06:00 UTC.
+
+Change it per environment in the variables file:
+
+```hcl
+maintenance_window = {
+  day_of_week    = "Tuesday"
+  start_time     = "23:00"
+  duration_hours = 8
+  utc_offset     = "+03:00"
+}
+```
+
+Azure keeps the window at a fixed UTC offset and does not follow daylight saving time, so an offset
+matching local winter time drifts an hour during summer time, and vice versa.
+
+The window must be at least four hours long, or AKS does not attempt an upgrade at all. AKS only
+*starts* work inside it: an upgrade still running when the window closes is allowed to finish, but
+nothing new begins. Windows are best effort - AKS reserves the right to break them for urgent,
+unplanned maintenance.
+
+[maintenance]: https://learn.microsoft.com/azure/aks/planned-maintenance
+
 ## Public clusters
 
 `private_cluster_enabled` defaults to `true`. Set it to `false` in the variables file for a public

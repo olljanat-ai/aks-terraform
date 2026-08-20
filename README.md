@@ -201,6 +201,11 @@ choice for a throwaway cluster and a poor one for anything else.
 - `lock_kind = "CanNotDelete"` puts a **management lock** on the cluster, so that neither Terraform
   nor a portal click can delete it. Terraform can still change it; removing the lock is a separate,
   deliberate step. Note that `ReadOnly` also blocks the upgrades AKS runs on its own.
+- The system pool runs in **one availability zone** unless `default_node_pool.availability_zones` is
+  set. Spreading it - `availability_zones = ["1", "2", "3"]` in a region that has them - is what
+  raises the control plane SLA from 99.9% to 99.95% on the paid tiers, and keeps the cluster running
+  through the loss of a datacentre. Zones can only be chosen when the pool is created; changing them
+  later replaces it.
 - The `Free` tier carries **no uptime SLA** for the control plane. `sku_tier = "Standard"` buys the
   99.9% (or 99.95% across availability zones) financially backed SLA and raises the supported node
   count; production clusters belong there.

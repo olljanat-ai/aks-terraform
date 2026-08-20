@@ -33,8 +33,8 @@ These must exist before running Terraform:
   Only needed while the cluster is private.
 
 The identity running Terraform needs `Contributor` on the resource group and, unless
-`create_role_assignments = false`, permission to create role assignments on the virtual network and
-the private DNS zone.
+`create_role_assignments = false`, permission to create role assignments on the subnets and the
+private DNS zone.
 
 ## Usage
 
@@ -106,6 +106,10 @@ A public cluster does not use the private DNS zone, so `private_dns_zone_name` c
 - **Workload identity** is on, together with the **OIDC issuer** it requires. Federate a Kubernetes
   service account with an Entra ID application against the `oidc_issuer_url` output instead of
   storing credentials in the cluster.
+- The cluster identity gets `Network Contributor` **on the subnets it uses**, not on the whole
+  virtual network - the least privilege AKS documents for a bring-your-own network. Set
+  `network_role_assignment_scope = "virtual_network"` for the wider grant when the cluster has to
+  reach network resources outside its own subnets.
 - The cluster uses a **user assigned identity** created by this module. AKS must be able to write
   records into the private DNS zone before the cluster exists, which a system assigned identity
   cannot do.

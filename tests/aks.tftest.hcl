@@ -244,6 +244,18 @@ run "rejects_a_node_pool_that_cannot_scale" {
   expect_failures = [var.default_node_pool]
 }
 
+run "rejects_a_max_surge_azure_cannot_read" {
+  command = plan
+
+  variables {
+    default_node_pool = {
+      max_surge = "10 percent"
+    }
+  }
+
+  expect_failures = [var.default_node_pool]
+}
+
 run "rejects_a_kubernetes_version_with_a_leading_v" {
   command = plan
 

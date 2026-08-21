@@ -167,16 +167,6 @@ module "aks" {
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = data.azurerm_subnet.node.id
   }
-  # Control plane logs. Nothing else records what the API server was asked to do, and the cluster
-  # keeps none of it once the control plane is gone.
-  diagnostic_settings = local.log_analytics_workspace_resource_id == null ? {} : {
-    control_plane = {
-      name                  = "${var.name}-control-plane"
-      log_categories        = var.control_plane_log_categories
-      log_groups            = []
-      workspace_resource_id = local.log_analytics_workspace_resource_id
-    }
-  }
   dns_prefix       = var.name
   enable_telemetry = var.enable_telemetry
   fqdn_subdomain   = local.fqdn_subdomain
@@ -228,10 +218,12 @@ module "aks" {
     enabled = true
   }
   security_profile = {
-    defender = !var.defender_enabled ? null : {
-      log_analytics_workspace_resource_id = local.log_analytics_workspace_resource_id
+    # Defender for Containers is off, like the rest of the Azure monitoring stack. Stated rather
+    # than left out, because a subscription with the Defender for Containers plan and its
+    # auto-provisioning on turns the agent on by itself.
+    defender = {
       security_monitoring = {
-        enabled = true
+        enabled = false
       }
     }
     image_cleaner = {

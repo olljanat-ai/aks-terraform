@@ -129,29 +129,6 @@ DESCRIPTION
   nullable    = false
 }
 
-variable "control_plane_log_categories" {
-  type = set(string)
-  default = [
-    "cluster-autoscaler",
-    "guard",
-    "kube-apiserver",
-    "kube-audit-admin",
-    "kube-controller-manager",
-  ]
-  description = <<DESCRIPTION
-Control plane log categories shipped to `log_analytics_workspace_resource_id`. The default is the
-set AKS recommends: `kube-audit-admin` carries the write operations of the full `kube-audit`
-category at a fraction of the volume, so add `kube-audit` only when read operations must be audited
-too. Ignored while no workspace is set.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = length(var.control_plane_log_categories) > 0
-    error_message = "control_plane_log_categories must not be empty. Leave log_analytics_workspace_resource_id unset to ship no logs at all."
-  }
-}
-
 variable "create_role_assignments" {
   type        = bool
   default     = true
@@ -233,21 +210,6 @@ DESCRIPTION
   }
 }
 
-variable "defender_enabled" {
-  type        = bool
-  default     = false
-  description = <<DESCRIPTION
-Whether to enable Microsoft Defender for Containers threat detection on the cluster. Requires
-`log_analytics_workspace_resource_id`, and is billed per vCPU hour.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = !var.defender_enabled || var.log_analytics_workspace_resource_id != null
-    error_message = "defender_enabled requires log_analytics_workspace_resource_id."
-  }
-}
-
 variable "enable_telemetry" {
   type        = bool
   default     = true
@@ -302,24 +264,6 @@ DESCRIPTION
   validation {
     condition     = var.lock_kind == null || contains(["CanNotDelete", "ReadOnly"], coalesce(var.lock_kind, ""))
     error_message = "lock_kind must be either \"CanNotDelete\" or \"ReadOnly\", or left unset."
-  }
-}
-
-variable "log_analytics_workspace_resource_id" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Resource ID of an existing Log Analytics workspace. Setting it ships the control plane logs in
-`control_plane_log_categories` there, and gives `defender_enabled` somewhere to report to. Left
-null, nothing is sent to Azure Monitor and nothing is billed for ingestion.
-
-This does not turn on Container Insights: the in-cluster monitoring add-ons are disabled on every
-cluster, because node, pod and metrics telemetry is collected by a third party agent instead.
-DESCRIPTION
-
-  validation {
-    condition     = var.log_analytics_workspace_resource_id == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.OperationalInsights/workspaces/[^/]+$", coalesce(var.log_analytics_workspace_resource_id, "")))
-    error_message = "log_analytics_workspace_resource_id must be a full workspace resource ID, starting with /subscriptions/."
   }
 }
 

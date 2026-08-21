@@ -219,17 +219,28 @@ its own answers, so the two SKUs behave differently even though they share one s
 
 Beyond the [prerequisites](#prerequisites), an Automatic cluster in an existing network needs:
 
-- **Subnets for the nodes, the hosted system components and the API server.** Microsoft's own
-  example uses three, sized `/24`, `/26` and `/28`. `node_subnet_name` and
-  `system_node_subnet_name` may name the same subnet, which puts the whole cluster in one - the
-  `prototype-automatic` environment does exactly that. The API server subnet cannot be shared: it
-  is used by AKS alone, a cluster reserves at least nine addresses in it, and it has to be
-  delegated to `Microsoft.ContainerService/managedClusters`.
+- **Three separate subnets** - nodes, hosted system components and the API server. Microsoft's own
+  example sizes them `/24`, `/26` and `/28`, and none of the three can be shared:
+
+  - `node_subnet_name` and `system_node_subnet_name` **must name different subnets**. Azure hosts
+    the system components apart from the nodes and answers a request that names one subnet for both
+    with `400 InvalidParameter: systemNodeByoSubnetId and nodeByoSubnetId must be different
+    subnets`, so Terraform refuses it at plan time.
+  - `api_server_subnet_name` is used by AKS alone. It has to be delegated to
+    `Microsoft.ContainerService/managedClusters`, and a cluster reserves at least nine addresses
+    in it.
 
   Leaving `api_server_subnet_name` unset turns API Server VNet Integration off, so no delegated
   subnet is needed and the API server is not injected into the network. **Microsoft documents the
   subnet as required for an Automatic cluster in an existing virtual network**, so Terraform warns
-  on every plan; Azure has the final say on whether it will build the cluster.
+  on every plan rather than refusing; Azure has the final say on whether it will build the cluster.
+
+  A cluster that brings no network at all is a different arrangement again: AKS creates its own
+  virtual network inside the `MC_` resource group and the bring-your-own subnet fields stay null,
+  which is why the portal can create an Automatic cluster without asking for any of this. That
+  cluster cannot be reached across a network boundary - see the node resource group lockdown note
+  below - and this configuration does not offer it, since every environment here attaches to a
+  network that already exists.
 - **`Network Contributor` on the whole virtual network**, not on the individual subnets. Node
   autoprovisioning creates node pools that the subnet assignments do not cover, which is why
   `network_role_assignment_scope` defaults to `virtual_network` for this SKU and Terraform warns

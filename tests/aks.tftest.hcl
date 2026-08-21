@@ -126,7 +126,10 @@ run "byo_private_dns_zone_is_granted_and_named" {
   }
 }
 
-run "automatic_grants_every_subnet_it_uses" {
+# Node autoprovisioning creates node pools of its own, which the subnet assignments do not cover, so
+# Microsoft documents Network Contributor on the whole virtual network for this SKU. A cluster left
+# on the subnet scope comes up half way and then sits in Creating until the deployment times out.
+run "automatic_is_granted_the_whole_virtual_network" {
   command = plan
 
   variables {
@@ -137,9 +140,126 @@ run "automatic_grants_every_subnet_it_uses" {
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.network_contributor) == 3
-    error_message = "AKS Automatic uses a node, a system node and an API server subnet, and needs access to all three."
+    condition     = keys(azurerm_role_assignment.network_contributor) == ["virtual_network"]
+    error_message = "AKS Automatic should get one assignment on the virtual network, not one per subnet."
   }
+  assert {
+    condition     = azurerm_role_assignment.network_contributor["virtual_network"].scope == data.azurerm_virtual_network.this.id
+    error_message = "The assignment should be scoped to the virtual network."
+  }
+}
+
+# The narrower scope stays reachable, since an environment may have the assignment already in place
+# at that scope, but it is the configuration the check block warns about.
+run "automatic_can_still_be_scoped_down_by_hand" {
+  command = plan
+
+  variables {
+    sku_name                      = "Automatic"
+    sku_tier                      = "Standard"
+    api_server_subnet_name        = "snet-aks-apiserver"
+    system_node_subnet_name       = "snet-aks-system"
+    network_role_assignment_scope = "subnet"
+  }
+
+  expect_failures = [check.automatic_network_role_assignment_scope]
+
+  assert {
+    condition     = length(azurerm_role_assignment.network_contributor) == 3
+    error_message = "An explicit subnet scope should still produce one assignment per subnet."
+  }
+}
+
+# A Base cluster is unaffected: it joins the subnets it is handed and nothing else.
+run "base_keeps_the_subnet_scoped_assignments" {
+  command = plan
+
+  assert {
+    condition     = keys(azurerm_role_assignment.network_contributor) == ["node_subnet"]
+    error_message = "A Base cluster should keep the least privilege subnet assignments."
+  }
+}
+
+# AKS Automatic sizes and rolls its own node pools. Everything written for a Base cluster has to be
+# dropped before it reaches the module, because the request the module sends to the agent pool after
+# the cluster is created is not filtered by SKU the way the create request is.
+run "automatic_sends_no_base_cluster_node_pool_settings" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    api_server_subnet_name  = "snet-aks-apiserver"
+    system_node_subnet_name = "snet-aks-system"
+    default_node_pool = {
+      vm_size             = "Standard_B2s"
+      enable_auto_scaling = false
+      node_count          = 1
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      local.default_agent_pool.vm_size == null,
+      local.default_agent_pool.count_of == null,
+      local.default_agent_pool.enable_auto_scaling == null,
+      local.default_agent_pool.type == null,
+      local.default_agent_pool.upgrade_settings == null,
+      local.default_agent_pool.availability_zones == null,
+    ])
+    error_message = "AKS Automatic should be sent no VM size, count, autoscaler, pool type or upgrade settings."
+  }
+  assert {
+    condition     = local.default_agent_pool.vnet_subnet_id == data.azurerm_subnet.node.id
+    error_message = "AKS Automatic still places its nodes in the node subnet."
+  }
+}
+
+run "base_keeps_its_node_pool_settings" {
+  command = plan
+
+  variables {
+    default_node_pool = {
+      vm_size             = "Standard_B2s"
+      enable_auto_scaling = false
+      node_count          = 1
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      local.default_agent_pool.vm_size == "Standard_B2s",
+      local.default_agent_pool.count_of == 1,
+      local.default_agent_pool.enable_auto_scaling == false,
+      local.default_agent_pool.type == "VirtualMachineScaleSets",
+      local.default_agent_pool.upgrade_settings.max_surge == "10%",
+    ])
+    error_message = "A Base cluster should still be sent the node pool it asked for."
+  }
+}
+
+# The AzAPI default of 30 minutes is under what an AKS Automatic cluster in an existing network
+# takes, and a Terraform side timeout does not stop the deployment - it just leaves the cluster in
+# Creating with nothing in state.
+run "cluster_operations_are_given_longer_than_the_provider_default" {
+  command = plan
+
+  assert {
+    condition     = var.cluster_timeouts.create == "90m"
+    error_message = "The cluster create timeout should be well above the 30 minute AzAPI default."
+  }
+}
+
+run "rejects_a_cluster_timeout_that_is_not_a_duration" {
+  command = plan
+
+  variables {
+    cluster_timeouts = {
+      create = "90 minutes"
+    }
+  }
+
+  expect_failures = [var.cluster_timeouts]
 }
 
 run "cost_analysis_stays_off_on_the_free_tier" {

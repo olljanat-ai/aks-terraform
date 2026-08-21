@@ -3,7 +3,7 @@
 Minimal Terraform for deploying AKS clusters with [Azure Verified Modules][avm].
 
 There is a single root module at the repository root. Everything an environment differs by lives in
-a variables file under `environments/` - no per-environment Terraform code.
+a variables file under `envs/` - no per-environment Terraform code.
 
 Clusters are attached to infrastructure that already exists - a resource group, a virtual network
 and a private DNS zone - and are **private by default**.
@@ -15,10 +15,11 @@ and a private DNS zone - and are **private by default**.
 | Path | Purpose |
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, and wires up private or public API server access. |
-| `environments/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
-| `environments/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades. Runs on the Standard tier, which Automatic requires. |
+| `envs/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
+| `envs/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades. Runs on the Standard tier, which Automatic requires. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
 | `backend.hcl.example` | Template for the shared remote state backend. |
+| `docs/troubleshooting.md` | What to do when an apply fails or times out, and how to get a cluster stuck in `Creating` back under Terraform's control. |
 | `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, and the Dependabot schedule that watches the pinned module and provider versions. |
 
 [module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
@@ -31,13 +32,21 @@ These must exist before running Terraform:
 - A **virtual network** in the same region, with:
   - a subnet for the cluster nodes;
   - for AKS Automatic, a second subnet for the hosted system components, and a third subnet for API
-    Server VNet Integration that is delegated to `Microsoft.ContainerService/managedClusters`.
+    Server VNet Integration that is delegated to `Microsoft.ContainerService/managedClusters` and is
+    at least a `/28`. See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
 
 The identity running Terraform needs `Contributor` on the resource group and, unless
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
 private DNS zone.
+
+The `Microsoft.PolicyInsights` resource provider should be **registered in the subscription**, since
+both SKUs run the Azure Policy add-on and AKS Automatic installs it whether or not you ask:
+
+```sh
+az provider register --namespace Microsoft.PolicyInsights
+```
 
 ## Usage
 
@@ -48,7 +57,7 @@ az login
 terraform init
 
 terraform workspace select -or-create prototype-free
-terraform apply -var-file=environments/prototype-free.tfvars
+terraform apply -var-file=envs/prototype-free.tfvars
 ```
 
 One root module serves every environment, so **each environment needs its own state**. Locally that
@@ -201,6 +210,51 @@ default_node_pool = {
 restrictive disruption budget can otherwise hold the upgrade indefinitely - and
 `node_soak_duration_minutes` waits after each node comes back before the next one is drained.
 
+## AKS Automatic
+
+`sku_name = "Automatic"` hands node provisioning, scaling, networking and upgrades to Azure. It is
+not simply a different value for the same cluster: Azure ignores most of the request and fills in
+its own answers, so the two SKUs behave differently even though they share one set of variables.
+
+Beyond the [prerequisites](#prerequisites), an Automatic cluster in an existing network needs:
+
+- **Three subnets** - nodes, hosted system components and the API server. Microsoft's own example
+  sizes them `/24`, `/26` and `/28`. The API server subnet is used by AKS alone, and a cluster
+  reserves at least nine addresses in it.
+- **`Network Contributor` on the whole virtual network**, not on the individual subnets. Node
+  autoprovisioning creates node pools that the subnet assignments do not cover, which is why
+  `network_role_assignment_scope` defaults to `virtual_network` for this SKU and Terraform warns
+  when an environment scopes it back down. A cluster missing this grant is created, gets stuck part
+  way through bringing its nodes up, and sits in `Creating` until the deployment times out.
+- **NSG rules that allow the traffic AKS needs**, if the subnets carry a network security group -
+  nodes to the API server subnet on TCP 443 and 4443, the Azure Load Balancer to it on TCP 9988,
+  and node-to-node, node-to-pod and pod-to-pod traffic on all ports. Traffic inside a virtual
+  network is allowed by default, so this only matters where that default has been narrowed.
+- **Outbound access** to the [AKS egress endpoints][egress] where a firewall or a user defined route
+  handles egress.
+
+What this configuration drops for the Automatic SKU, because Azure refuses or ignores it:
+
+| Setting | What happens |
+| --- | --- |
+| `default_node_pool` | Dropped in full apart from the pool name. Azure sizes, scales and rolls the pools itself, and the node count falls back to the three nodes the module defaults to. |
+| `network_profile` | Dropped by the module, including `pod_cidr` and `service_cidr`. **Azure picks its own ranges** - check that they do not overlap the address space of the existing network. |
+| `azure_policy_enabled` | Ignored. Automatic always runs the Azure Policy add-on. |
+| `disable_local_accounts` | **Not sent.** The module's Automatic request has no place for it, so unlike a `Base` cluster an Automatic cluster is created with local accounts enabled. Turn them off afterwards with `az aks update --disable-local-accounts`. |
+| `kubernetes_version` | Sent as a separate update after the cluster exists, not as part of the create. |
+
+Two more things worth knowing:
+
+- **Migration between SKUs is not supported.** Changing `sku_name` on a cluster that already exists
+  is not a route from one to the other; the cluster has to be rebuilt.
+- **The node resource group is locked down**, so the `MC_` resource group cannot be changed and no
+  virtual network link can be added to the AKS-managed private DNS zone. Bring your own zone for
+  cross-network or custom DNS scenarios.
+
+If a deployment of an Automatic cluster times out, see [Troubleshooting](docs/troubleshooting.md).
+
+[egress]: https://learn.microsoft.com/azure/aks/outbound-rules-control-egress
+
 ## Public clusters
 
 `private_cluster_enabled` defaults to `true`. Set it to `false` in the variables file for a public
@@ -236,6 +290,10 @@ choice for a throwaway cluster and a poor one for anything else.
 - Terraform **waits after creating the role assignments** before creating the cluster, because Azure
   RBAC is eventually consistent and the cluster is otherwise regularly refused access to the subnet
   it is supposed to join. Tune or disable the wait with `role_assignment_propagation_delay`.
+- Cluster operations are given **90 minutes** rather than the 30 the AzAPI provider defaults to,
+  through `cluster_timeouts`. Giving up on the Terraform side does not stop the deployment: Azure
+  carries on, and the cluster is left in `Creating` with nothing in state pointing at it. An AKS
+  Automatic cluster in an existing network regularly needs more than half an hour.
 - The cluster identity gets `Network Contributor` **on the subnets it uses**, not on the whole
   virtual network - the least privilege AKS documents for a bring-your-own network. Set
   `network_role_assignment_scope = "virtual_network"` for the wider grant when the cluster has to

@@ -129,6 +129,37 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "cluster_timeouts" {
+  type = object({
+    create = optional(string, "90m")
+    delete = optional(string, "90m")
+    read   = optional(string, "10m")
+    update = optional(string, "90m")
+  })
+  default     = {}
+  description = <<DESCRIPTION
+How long Terraform waits for a cluster operation to finish before giving up. The AzAPI provider
+defaults to 30 minutes, which an AKS Automatic cluster in an existing network regularly exceeds -
+the API server, the hosted system node pools and the add-ons Azure installs on its own are all
+created before the request returns. Terraform then reports a timeout while Azure carries on, and the
+cluster is left in `Creating` with nothing in state to reconcile it against.
+
+Giving up early does not stop the deployment, so these are set well above what a healthy create
+takes rather than close to it.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition = alltrue([for timeout in [
+      var.cluster_timeouts.create,
+      var.cluster_timeouts.delete,
+      var.cluster_timeouts.read,
+      var.cluster_timeouts.update,
+    ] : can(regex("^[0-9]+(s|m|h)$", timeout))])
+    error_message = "Every cluster_timeouts value must be a duration such as \"90m\" or \"2h\"."
+  }
+}
+
 variable "create_role_assignments" {
   type        = bool
   default     = true
@@ -158,8 +189,8 @@ variable "default_node_pool" {
   })
   default     = {}
   description = <<DESCRIPTION
-System node pool of the cluster. An AKS Automatic cluster keeps only `name` and `node_count` and
-provisions nodes on demand from there on, so the rest is dropped for that SKU.
+System node pool of the cluster. **Ignored for AKS Automatic apart from `name`**, which sizes,
+scales and rolls its own node pools - see the README for what that SKU drops.
 
 The last three govern how the pool is rolled during an upgrade:
 
@@ -383,22 +414,23 @@ DESCRIPTION
 
 variable "network_role_assignment_scope" {
   type        = string
-  default     = "subnet"
+  default     = null
   description = <<DESCRIPTION
 Scope of the `Network Contributor` assignment the cluster identity gets on the existing network.
 
-- `subnet` - One assignment per subnet the cluster actually uses. This is the least privilege that
-  AKS documents for a bring-your-own network, and the default.
-- `virtual_network` - A single assignment on the whole virtual network. Needed only when the cluster
-  has to reach network resources outside its own subnets.
+- `subnet` - One assignment per subnet the cluster actually uses. This is the least privilege AKS
+  documents for a bring-your-own network, and the default for a `Base` cluster.
+- `virtual_network` - A single assignment on the whole virtual network. The default for AKS
+  Automatic, which Microsoft documents as requiring it: node autoprovisioning creates the node pools
+  itself and works at virtual network scope, not at the scope of the subnets named here. Also needed
+  on a `Base` cluster that has to reach network resources outside its own subnets.
 
-Ignored when `create_role_assignments = false`.
+Left unset, this follows `sku_name`. Ignored when `create_role_assignments = false`.
 DESCRIPTION
-  nullable    = false
 
   validation {
-    condition     = contains(["subnet", "virtual_network"], var.network_role_assignment_scope)
-    error_message = "network_role_assignment_scope must be either \"subnet\" or \"virtual_network\"."
+    condition     = var.network_role_assignment_scope == null || contains(["subnet", "virtual_network"], coalesce(var.network_role_assignment_scope, ""))
+    error_message = "network_role_assignment_scope must be either \"subnet\" or \"virtual_network\", or left unset."
   }
 }
 

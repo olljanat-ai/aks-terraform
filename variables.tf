@@ -528,12 +528,20 @@ variable "system_node_subnet_name" {
   default     = null
   description = <<DESCRIPTION
 Name of the existing subnet used by the hosted system components of an AKS Automatic cluster.
-Required for AKS Automatic, ignored otherwise.
+Required for AKS Automatic, ignored otherwise. **It must be a different subnet from
+`node_subnet_name`** - Azure hosts the system components separately from the nodes and refuses a
+request that names one subnet for both.
 DESCRIPTION
 
   validation {
     condition     = var.sku_name != "Automatic" || var.system_node_subnet_name != null
     error_message = "AKS Automatic on an existing network requires system_node_subnet_name."
+  }
+  # Azure answers this one with `400 InvalidParameter: systemNodeByoSubnetId and nodeByoSubnetId
+  # must be different subnets`, so there is no point sending it.
+  validation {
+    condition     = var.sku_name != "Automatic" || var.system_node_subnet_name != var.node_subnet_name
+    error_message = "system_node_subnet_name must name a different subnet from node_subnet_name. AKS places the hosted system components of an Automatic cluster in their own subnet and rejects a request that gives it the node subnet."
   }
 }
 

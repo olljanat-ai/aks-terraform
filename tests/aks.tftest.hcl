@@ -202,13 +202,8 @@ run "one_subnet_in_two_roles_is_granted_once" {
   command = plan
 
   variables {
-    sku_name                      = "Automatic"
-    sku_tier                      = "Standard"
-    system_node_subnet_name       = "snet-aks-nodes"
-    network_role_assignment_scope = "subnet"
+    system_node_subnet_name = "snet-aks-nodes"
   }
-
-  expect_failures = [check.automatic_network_role_assignment_scope, check.automatic_api_server_subnet]
 
   assert {
     condition     = length(azurerm_role_assignment.network_contributor) == 1
@@ -647,6 +642,20 @@ run "rejects_a_maintenance_window_too_short_to_upgrade_in" {
   }
 
   expect_failures = [var.maintenance_window]
+}
+
+# Azure answers this with 400 InvalidParameter, so it is refused before the request is built.
+run "rejects_automatic_reusing_the_node_subnet_for_system_nodes" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    api_server_subnet_name  = "snet-aks-apiserver"
+    system_node_subnet_name = "snet-aks-nodes"
+  }
+
+  expect_failures = [var.system_node_subnet_name]
 }
 
 run "rejects_automatic_without_a_system_node_subnet" {

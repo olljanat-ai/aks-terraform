@@ -246,6 +246,21 @@ check "api_server_exposure" {
   }
 }
 
+# Pods and services on a range that also belongs to the existing network have nowhere to route to.
+# Azure creates the cluster regardless and the damage only shows once something tries to talk across
+# it, so this is checked before the apply rather than discovered afterwards.
+#
+# It matters most for AKS Automatic. The module drops the whole network profile for that SKU while
+# `outbound_type` is `loadBalancer`, so the ranges below are Azure's own defaults rather than the
+# ones network_profile asks for - and Azure's default service range, 10.0.0.0/16, collides with a
+# great many existing networks. The ranges cannot be changed after the cluster is created.
+check "cluster_cidrs_do_not_overlap_the_network" {
+  assert {
+    condition     = length(local.overlapping_cluster_cidrs) == 0
+    error_message = "The cluster-internal ranges of ${var.name} collide with the address space of ${var.virtual_network_name}: ${join(", ", local.overlapping_cluster_cidrs)}.${local.network_profile_is_sent ? " Move network_profile.pod_cidr and network_profile.service_cidr out of the way." : " These are Azure's defaults, because an AKS Automatic cluster on loadBalancer egress is sent no network profile at all - see the AKS Automatic section of the README."}"
+  }
+}
+
 # AKS Automatic cannot bring its own node pools up without Network Contributor on the whole virtual
 # network. This only fires when an environment overrides the scope back down to the subnets, since
 # that is otherwise the default for Base clusters only.

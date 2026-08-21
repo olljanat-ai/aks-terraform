@@ -11,8 +11,6 @@ locals {
   # instead. AKS Automatic derives both itself.
   fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)
   is_automatic   = var.sku_name == "Automatic"
-  # Null rather than an empty string, so that "no workspace" is one comparison everywhere.
-  log_analytics_workspace_resource_id = try(trimspace(var.log_analytics_workspace_resource_id), "") == "" ? null : var.log_analytics_workspace_resource_id
   # Scopes the cluster identity is granted Network Contributor on. Keyed by role rather than by
   # resource ID, so that renaming a subnet does not churn the state addresses of the assignments.
   network_role_assignment_scopes = !var.create_role_assignments ? {} : (

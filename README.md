@@ -140,43 +140,39 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 
 ## Monitoring and ingress
 
-Cluster telemetry and ingress are handled by third party solutions running inside the cluster, so
-the Azure add-ons that would otherwise duplicate them are turned **off on every cluster**, without a
-variable to turn them back on:
+Monitoring and ingress are handled by third party solutions running inside the cluster, so
+**nothing is sent to Azure Monitor and no managed ingress controller is installed**. The Azure
+features that would otherwise duplicate them are off on every cluster, with no variable to turn
+them back on:
 
 | Disabled | What it would have done |
 | --- | --- |
 | [Container Insights][insights] (`omsagent`) | Ships node and pod telemetry to a Log Analytics workspace. |
 | [Azure Monitor managed Prometheus][prometheus] | Scrapes cluster metrics into an Azure Monitor workspace. |
+| Control plane [diagnostic setting][diagnostics] | Ships the API server, audit and autoscaler logs to a Log Analytics workspace. |
+| [Defender for Containers][defender] | Runs the Defender security agent on the nodes for threat detection. |
 | [Application Routing][approuting] (`webAppRouting`) | Installs and manages the default NGINX ingress controller. |
 
-They are disabled explicitly rather than simply left unconfigured, because **AKS Automatic enables
-all three by itself** unless the create request says otherwise.
+Most of them are stated as disabled rather than simply left unconfigured, because Azure turns them
+on by itself otherwise: **AKS Automatic** creates a cluster with Container Insights, managed
+Prometheus and App Routing already enabled, and a subscription running the **Defender for Containers
+plan** with auto-provisioning on enables the security agent on clusters as they appear.
 
-What remains of Azure Monitor is the control plane diagnostic setting, and it is opt-in. Point
-`log_analytics_workspace_resource_id` at an existing Log Analytics workspace to ship the control
-plane logs there:
+Two consequences worth knowing about:
 
-```hcl
-log_analytics_workspace_resource_id = "/subscriptions/<subscription>/resourceGroups/rg-monitoring/providers/Microsoft.OperationalInsights/workspaces/law-shared"
-```
-
-The control plane keeps no history of its own, so without this nothing records what the API server
-was asked to do - and it is not something an in-cluster agent can collect for you. The default
-categories are the ones AKS recommends - `kube-apiserver`, `kube-audit-admin`,
-`kube-controller-manager`, `cluster-autoscaler` and `guard`. `kube-audit-admin` holds the write
-operations of the full `kube-audit` category at a fraction of the volume; add `kube-audit` to
-`control_plane_log_categories` only when read operations must be audited as well.
-
-`defender_enabled = true` adds Microsoft Defender for Containers threat detection, which reports to
-the same workspace. Both are off by default: nothing is ingested, and nothing is billed, until a
-workspace is named.
+- **The control plane logs are not collected anywhere.** The control plane keeps no history of its
+  own and is not part of the cluster, so no in-cluster agent can pick up `kube-audit` or
+  `kube-apiserver` for you. If those are needed - typically for an audit trail - they have to come
+  from a diagnostic setting on the cluster resource, created outside this configuration.
+- **Nothing is billed for ingestion**, and the cluster emits platform metrics only.
 
 The **Azure Policy add-on** is on by default (`azure_policy_enabled`), so policy definitions
 assigned to the subscription or resource group are enforced inside the cluster rather than merely
 reported on. AKS Automatic always runs it.
 
 [approuting]: https://learn.microsoft.com/azure/aks/app-routing
+[defender]: https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction
+[diagnostics]: https://learn.microsoft.com/azure/aks/monitor-aks-reference
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
 [prometheus]: https://learn.microsoft.com/azure/azure-monitor/essentials/prometheus-metrics-overview
 

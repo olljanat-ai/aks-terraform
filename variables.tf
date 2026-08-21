@@ -73,13 +73,12 @@ variable "api_server_subnet_name" {
   default     = null
   description = <<DESCRIPTION
 Name of the existing subnet used for API Server VNet Integration. The subnet must be delegated to
-`Microsoft.ContainerService/managedClusters`. Required for AKS Automatic.
-DESCRIPTION
+`Microsoft.ContainerService/managedClusters` and be a `/28` or larger.
 
-  validation {
-    condition     = var.sku_name != "Automatic" || var.api_server_subnet_name != null
-    error_message = "AKS Automatic on an existing network requires api_server_subnet_name."
-  }
+Leave it unset for a cluster whose API server is not joined to the network. Microsoft documents the
+subnet as required for an AKS Automatic cluster in an existing virtual network, so Terraform warns
+about that combination rather than refusing it.
+DESCRIPTION
 }
 
 variable "auto_upgrade" {

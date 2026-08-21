@@ -114,7 +114,14 @@ Azure RBAC is eventually consistent, so an assignment created seconds before the
 be invisible to it. That is what `role_assignment_propagation_delay` is for; raise it if an apply
 fails with an authorization error on a subnet.
 
-### The API server subnet is not delegated, or is too small
+### The API server subnet is not delegated, is too small, or is missing
+
+An Automatic cluster with no `api_server_subnet_name` at all runs without API Server VNet
+Integration. Microsoft documents the subnet as required for this SKU in an existing virtual network,
+so a cluster that is refused or hangs with that combination is the first thing to suspect - give it
+a delegated `/28` and try again.
+
+When there is one:
 
 ```sh
 az network vnet subnet show -g "$RG" --vnet-name vnet-aks-prototype -n snet-aks-api \

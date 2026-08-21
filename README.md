@@ -31,9 +31,10 @@ These must exist before running Terraform:
 - A **resource group** for the cluster.
 - A **virtual network** in the same region, with:
   - a subnet for the cluster nodes;
-  - for AKS Automatic, a second subnet for the hosted system components, and a third subnet for API
-    Server VNet Integration that is delegated to `Microsoft.ContainerService/managedClusters` and is
-    at least a `/28`. See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
+  - for AKS Automatic, a subnet for the hosted system components - which may be the node subnet -
+    and, for API Server VNet Integration, a subnet delegated to
+    `Microsoft.ContainerService/managedClusters` that is at least a `/28`. See
+    [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
 
@@ -218,9 +219,17 @@ its own answers, so the two SKUs behave differently even though they share one s
 
 Beyond the [prerequisites](#prerequisites), an Automatic cluster in an existing network needs:
 
-- **Three subnets** - nodes, hosted system components and the API server. Microsoft's own example
-  sizes them `/24`, `/26` and `/28`. The API server subnet is used by AKS alone, and a cluster
-  reserves at least nine addresses in it.
+- **Subnets for the nodes, the hosted system components and the API server.** Microsoft's own
+  example uses three, sized `/24`, `/26` and `/28`. `node_subnet_name` and
+  `system_node_subnet_name` may name the same subnet, which puts the whole cluster in one - the
+  `prototype-automatic` environment does exactly that. The API server subnet cannot be shared: it
+  is used by AKS alone, a cluster reserves at least nine addresses in it, and it has to be
+  delegated to `Microsoft.ContainerService/managedClusters`.
+
+  Leaving `api_server_subnet_name` unset turns API Server VNet Integration off, so no delegated
+  subnet is needed and the API server is not injected into the network. **Microsoft documents the
+  subnet as required for an Automatic cluster in an existing virtual network**, so Terraform warns
+  on every plan; Azure has the final say on whether it will build the cluster.
 - **`Network Contributor` on the whole virtual network**, not on the individual subnets. Node
   autoprovisioning creates node pools that the subnet assignments do not cover, which is why
   `network_role_assignment_scope` defaults to `virtual_network` for this SKU and Terraform warns

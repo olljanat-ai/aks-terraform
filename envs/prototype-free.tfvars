@@ -3,14 +3,11 @@
 #
 #   terraform workspace select -or-create prototype-free
 #   terraform apply -var-file=environments/prototype-free.tfvars
-#
-# Every name below points at infrastructure that must already exist. Replace them with your own.
 
 name     = "aks-prototype-free"
 location = "swedencentral"
 
 sku_name = "Base"
-# Free carries no uptime SLA and no cost analysis - Azure sells that with the paid tiers only.
 sku_tier = "Free"
 
 # Existing resource group.
@@ -26,22 +23,14 @@ private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 # private_dns_zone_resource_group_name = "rg-network"
 
 # Private by default. Set to false, and optionally restrict the source ranges, for a public cluster.
-private_cluster_enabled = true
-# api_server_authorized_ip_ranges = ["203.0.113.0/24"]
+private_cluster_enabled         = false
+api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 
-# Nothing is sent to Azure Monitor: Container Insights, managed Prometheus, the control plane
-# diagnostic setting, Defender for Containers and the App Routing ingress controller are all
-# disabled on every cluster, because third party solutions cover monitoring and ingress.
-
-# Object IDs of the Entra ID groups that get cluster admin. Local accounts are disabled, so without
-# either these or an Azure RBAC role assignment on the cluster nobody can reach the API server.
 entra_admin_group_object_ids = []
 
 default_node_pool = {
-  vm_size   = "Standard_D4ds_v5"
-  min_count = 2
-  max_count = 4
-
-  # Spread the pool across availability zones in a region that has them. Only settable at creation.
-  # availability_zones = ["1", "2", "3"]
+  vm_size             = "Standard_B2s"
+  enable_auto_scaling = false
+  min_count           = 1
+  max_count           = 1
 }

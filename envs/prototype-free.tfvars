@@ -2,7 +2,7 @@
 # no uptime SLA. Private by default.
 #
 #   terraform workspace select -or-create prototype-free
-#   terraform apply -var-file=environments/prototype-free.tfvars
+#   terraform apply -var-file=envs/prototype-free.tfvars
 
 name     = "aks-prototype-free"
 location = "swedencentral"

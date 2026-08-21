@@ -62,8 +62,9 @@ resource "azurerm_user_assigned_identity" "this" {
 }
 
 # Lets the cluster join nodes, load balancers and the integrated API server to the existing network.
-# Scoped to the subnets the cluster uses rather than the whole virtual network, unless
-# network_role_assignment_scope says otherwise.
+# A Base cluster is scoped to the subnets it uses; AKS Automatic is scoped to the whole virtual
+# network, because node autoprovisioning needs it. Either can be overridden through
+# network_role_assignment_scope.
 resource "azurerm_role_assignment" "network_contributor" {
   for_each = local.network_role_assignment_scopes
 
@@ -146,30 +147,11 @@ module "aks" {
       enabled = false
     }
   }
-  default_agent_pool = {
-    availability_zones  = var.default_node_pool.availability_zones
-    count_of            = var.default_node_pool.node_count
-    enable_auto_scaling = var.default_node_pool.enable_auto_scaling
-    max_count           = var.default_node_pool.enable_auto_scaling ? var.default_node_pool.max_count : null
-    max_pods            = var.default_node_pool.max_pods
-    min_count           = var.default_node_pool.enable_auto_scaling ? var.default_node_pool.min_count : null
-    name                = var.default_node_pool.name
-    os_disk_size_gb     = var.default_node_pool.os_disk_size_gb
-    type                = "VirtualMachineScaleSets"
-    # How the pool is rolled during an upgrade. These belong to the pool: the cluster level
-    # upgrade_settings of the module only carries the force-upgrade override, and silently drops
-    # anything else, because Terraform discards object attributes a type constraint does not declare.
-    upgrade_settings = {
-      drain_timeout_in_minutes      = var.default_node_pool.drain_timeout_minutes
-      max_surge                     = var.default_node_pool.max_surge
-      node_soak_duration_in_minutes = var.default_node_pool.node_soak_duration_minutes
-    }
-    vm_size        = var.default_node_pool.vm_size
-    vnet_subnet_id = data.azurerm_subnet.node.id
-  }
-  dns_prefix       = var.name
-  enable_telemetry = var.enable_telemetry
-  fqdn_subdomain   = local.fqdn_subdomain
+  cluster_timeouts   = var.cluster_timeouts
+  default_agent_pool = local.default_agent_pool
+  dns_prefix         = var.name
+  enable_telemetry   = var.enable_telemetry
+  fqdn_subdomain     = local.fqdn_subdomain
   # AKS Automatic places its hosted system components in a subnet of the existing network.
   hosted_system_profile = local.is_automatic && var.system_node_subnet_name != null ? {
     enabled               = true
@@ -261,6 +243,16 @@ check "api_server_exposure" {
   assert {
     condition     = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) > 0
     error_message = "The API server of ${var.name} is public and reachable from any address. Set private_cluster_enabled = true, or list the ranges that need to reach it in api_server_authorized_ip_ranges."
+  }
+}
+
+# AKS Automatic cannot bring its own node pools up without Network Contributor on the whole virtual
+# network. This only fires when an environment overrides the scope back down to the subnets, since
+# that is otherwise the default for Base clusters only.
+check "automatic_network_role_assignment_scope" {
+  assert {
+    condition     = !local.is_automatic || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
+    error_message = "${var.name} is an AKS Automatic cluster scoped to its subnets. Node autoprovisioning creates node pools the subnet assignments do not cover, and the cluster can sit in Creating until it times out. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
   }
 }
 

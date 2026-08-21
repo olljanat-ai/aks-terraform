@@ -2,7 +2,7 @@
 # upgrades. Automatic requires the Standard tier and API Server VNet Integration. Private by default.
 #
 #   terraform workspace select -or-create prototype-automatic
-#   terraform apply -var-file=environments/prototype-automatic.tfvars
+#   terraform apply -var-file=envs/prototype-automatic.tfvars
 
 name     = "aks-prototype-automatic"
 location = "swedencentral"
@@ -14,11 +14,13 @@ sku_tier = "Standard"
 resource_group_name = "rg-aks-prototype"
 
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
+# The cluster identity is granted Network Contributor on the whole virtual network for this SKU,
+# because node autoprovisioning creates node pools the subnets named here do not cover.
 virtual_network_name = "vnet-aks-prototype"
 node_subnet_name     = "snet-aks-nodes"
-# Hosted system components of the Automatic cluster.
+# Hosted system components of the Automatic cluster. Microsoft's own example uses a /26.
 system_node_subnet_name = "snet-aks-system"
-# Must be delegated to Microsoft.ContainerService/managedClusters.
+# Must be delegated to Microsoft.ContainerService/managedClusters, and a /28 at the very least.
 api_server_subnet_name = "snet-aks-api"
 # virtual_network_resource_group_name = "rg-network"
 
@@ -32,8 +34,5 @@ api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 
 entra_admin_group_object_ids = []
 
-# Automatic keeps only the initial size and provisions nodes on demand from there on.
-default_node_pool = {
-  enable_auto_scaling = false
-  node_count          = 1
-}
+# default_node_pool is deliberately left out. AKS Automatic sizes, scales and rolls its own node
+# pools, and everything this variable carries is dropped for this SKU - see the README.

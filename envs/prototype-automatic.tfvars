@@ -14,12 +14,13 @@ sku_tier = "Standard"
 resource_group_name = "rg-aks-prototype"
 
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
-# The whole cluster goes into one subnet: the nodes and the hosted system components alike.
-# The cluster identity is granted Network Contributor on the whole virtual network for this SKU,
-# because node autoprovisioning creates node pools the subnet named here does not cover.
+# The nodes go into snet-aks-nodes. The hosted system components need a subnet of their own - Azure
+# refuses a request that names one subnet for both - so snet-aks-system carries those and nothing
+# else. The cluster identity is granted Network Contributor on the whole virtual network for this
+# SKU, because node autoprovisioning creates node pools these subnets do not cover.
 virtual_network_name    = "vnet-aks-prototype"
 node_subnet_name        = "snet-aks-nodes"
-system_node_subnet_name = "snet-aks-nodes"
+system_node_subnet_name = "snet-aks-system"
 # virtual_network_resource_group_name = "rg-network"
 
 # No API Server VNet Integration: api_server_subnet_name is deliberately left unset, so the API

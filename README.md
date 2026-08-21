@@ -166,11 +166,18 @@ Two consequences worth knowing about:
   from a diagnostic setting on the cluster resource, created outside this configuration.
 - **Nothing is billed for ingestion**, and the cluster emits platform metrics only.
 
+What the clusters do keep is [cost analysis][costanalysis], which is a Cost Management feature
+rather than an Azure Monitor one: it breaks the cluster spend down by namespace and deployment in
+the portal, which nothing inside the cluster can work out on its own. Azure sells it with the paid
+tiers only, so it follows `sku_tier` - on for `Standard` and `Premium`, off on `Free`, where the
+request would be rejected.
+
 The **Azure Policy add-on** is on by default (`azure_policy_enabled`), so policy definitions
 assigned to the subscription or resource group are enforced inside the cluster rather than merely
 reported on. AKS Automatic always runs it.
 
 [approuting]: https://learn.microsoft.com/azure/aks/app-routing
+[costanalysis]: https://learn.microsoft.com/azure/aks/cost-analysis
 [defender]: https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction
 [diagnostics]: https://learn.microsoft.com/azure/aks/monitor-aks-reference
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
@@ -221,8 +228,8 @@ choice for a throwaway cluster and a poor one for anything else.
   through the loss of a datacentre. Zones can only be chosen when the pool is created; changing them
   later replaces it.
 - The `Free` tier carries **no uptime SLA** for the control plane. `sku_tier = "Standard"` buys the
-  99.9% (or 99.95% across availability zones) financially backed SLA and raises the supported node
-  count; production clusters belong there.
+  99.9% (or 99.95% across availability zones) financially backed SLA, raises the supported node
+  count and is what makes cost analysis available; production clusters belong there.
 - **Workload identity** is on, together with the **OIDC issuer** it requires. Federate a Kubernetes
   service account with an Entra ID application against the `oidc_issuer_url` output instead of
   storing credentials in the cluster.

@@ -10,6 +10,7 @@ name     = "aks-prototype-automatic"
 location = "swedencentral"
 
 sku_name = "Automatic"
+# A paid tier, so the cluster spend is broken down by namespace and deployment in Cost Management.
 sku_tier = "Standard"
 
 # Existing resource group.

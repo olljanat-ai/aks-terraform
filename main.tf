@@ -203,6 +203,14 @@ module "aks" {
     system_assigned            = false
     user_assigned_resource_ids = [azurerm_user_assigned_identity.this.id]
   }
+  # Cost analysis, which is the one Azure side telemetry these clusters do keep: it feeds Azure Cost
+  # Management rather than Azure Monitor, and it is the only place the spend of a namespace or a
+  # deployment can be seen at all. Off on the Free tier, where Azure rejects it.
+  metrics_profile = {
+    cost_analysis = {
+      enabled = local.cost_analysis_enabled
+    }
+  }
   network_profile = var.network_profile
   sku = {
     name = var.sku_name

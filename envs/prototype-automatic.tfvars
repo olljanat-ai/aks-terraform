@@ -3,14 +3,11 @@
 #
 #   terraform workspace select -or-create prototype-automatic
 #   terraform apply -var-file=environments/prototype-automatic.tfvars
-#
-# Every name below points at infrastructure that must already exist. Replace them with your own.
 
 name     = "aks-prototype-automatic"
 location = "swedencentral"
 
 sku_name = "Automatic"
-# A paid tier, so the cluster spend is broken down by namespace and deployment in Cost Management.
 sku_tier = "Standard"
 
 # Existing resource group.
@@ -22,7 +19,7 @@ node_subnet_name     = "snet-aks-nodes"
 # Hosted system components of the Automatic cluster.
 system_node_subnet_name = "snet-aks-system"
 # Must be delegated to Microsoft.ContainerService/managedClusters.
-api_server_subnet_name = "snet-aks-apiserver"
+api_server_subnet_name = "snet-aks-api"
 # virtual_network_resource_group_name = "rg-network"
 
 # Existing private DNS zone for the API server.
@@ -30,21 +27,13 @@ private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 # private_dns_zone_resource_group_name = "rg-network"
 
 # Private by default. Set to false, and optionally restrict the source ranges, for a public cluster.
-private_cluster_enabled = true
-# api_server_authorized_ip_ranges = ["203.0.113.0/24"]
+private_cluster_enabled         = false
+api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 
-# Nothing is sent to Azure Monitor: Container Insights, managed Prometheus, the control plane
-# diagnostic setting, Defender for Containers and the App Routing ingress controller are all
-# disabled on every cluster, because third party solutions cover monitoring and ingress.
-
-# Object IDs of the Entra ID groups that get cluster admin. Local accounts are disabled, so without
-# either these or an Azure RBAC role assignment on the cluster nobody can reach the API server.
 entra_admin_group_object_ids = []
 
 # Automatic keeps only the initial size and provisions nodes on demand from there on.
 default_node_pool = {
-  node_count = 3
-
-  # Spread the pool across availability zones in a region that has them. Only settable at creation.
-  # availability_zones = ["1", "2", "3"]
+  enable_auto_scaling = false
+  node_count          = 1
 }

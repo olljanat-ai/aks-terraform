@@ -317,3 +317,54 @@ moved {
   from = module.aks.module.maintenanceconfiguration["default"].azapi_resource.this
   to   = azapi_resource.maintenance_configuration["default"]
 }
+
+# ------------------------------------------------------------------------------------------------
+# Rapid7 InsightCloudSec Kubernetes remote scanner
+# ------------------------------------------------------------------------------------------------
+# The remote scanner reaches the cluster from outside instead of running an agent in it: it calls
+# the AKS control plane for a kubeconfig and then reads the cluster over the Kubernetes API. Azure
+# RBAC is on and local accounts are disabled, so both halves of that are Azure role assignments -
+# `actions` cover the control plane call, `dataActions` cover what the resulting token may do inside
+# the cluster. No built-in role carries that combination, so it is a custom role definition.
+#
+# The permission list is Rapid7's, unchanged:
+# https://docs.rapid7.com/insightcloudsec/kubernetes-remote-scanner/
+#
+# Rapid7 documents creating this once at subscription scope and assigning it there. Here it is
+# created per cluster and assigned on the cluster instead, so that onboarding a cluster to the
+# scanner does not hand Rapid7 read access to every other cluster in the subscription. A custom role
+# cannot be assignable at resource scope, so the definition itself lives on the resource group.
+resource "azurerm_role_definition" "rapid7_scanner" {
+  count = var.rapid7_scanner_principal_id == null ? 0 : 1
+
+  name        = "Rapid7 Kubernetes Scanner (${var.name})"
+  scope       = data.azurerm_resource_group.this.id
+  description = "Lets the Rapid7 InsightCloudSec remote scanner read every resource in ${var.name} and create subjectaccessreviews against it."
+
+  permissions {
+    actions = [
+      # Fetch a user kubeconfig for the cluster. With local accounts disabled this is an Entra
+      # backed one, which is why the data actions below are what actually decide access.
+      "Microsoft.ContainerService/managedClusters/listClusterUserCredential/action",
+      "Microsoft.ContainerService/managedClusters/read",
+    ]
+    data_actions = [
+      # Read every Kubernetes object kind, secrets included - the scanner reports on their
+      # configuration, not just their existence.
+      "Microsoft.ContainerService/managedClusters/*/read",
+      # SubjectAccessReview, which the scanner posts to work out what it is allowed to look at
+      # before it starts. It is a write only in the API sense: the request is evaluated and
+      # answered, and nothing is stored.
+      "Microsoft.ContainerService/managedClusters/authorization.k8s.io/subjectaccessreviews/write",
+    ]
+  }
+}
+
+resource "azurerm_role_assignment" "rapid7_scanner" {
+  count = var.rapid7_scanner_principal_id == null ? 0 : 1
+
+  principal_id       = var.rapid7_scanner_principal_id
+  principal_type     = "ServicePrincipal"
+  role_definition_id = azurerm_role_definition.rapid7_scanner[0].role_definition_resource_id
+  scope              = module.aks.resource_id
+}

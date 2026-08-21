@@ -297,6 +297,25 @@ DESCRIPTION
   }
 }
 
+variable "managed_identity_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of the user assigned identity created for the cluster. Defaults to `<name>-identity`.
+
+Environments here follow `id-<region code>-<environment>-<function>`, for example
+`id-sec-prototype-aks-automatic`. Renaming an identity **replaces it**: the new one gets a new
+principal ID, its role assignments are created afresh, and the cluster is updated to use it. That is
+ordered so the cluster is never left pointing at an identity that no longer exists, but it is not a
+cosmetic change to make on a cluster that is carrying traffic.
+DESCRIPTION
+
+  validation {
+    condition     = var.managed_identity_name == null || can(regex("^[a-zA-Z0-9][a-zA-Z0-9_-]{2,127}$", coalesce(var.managed_identity_name, "")))
+    error_message = "managed_identity_name must be 3 to 128 characters of letters, digits, hyphens and underscores, starting with a letter or digit."
+  }
+}
+
 variable "maintenance_window" {
   type = object({
     day_of_week    = optional(string, "Tuesday")

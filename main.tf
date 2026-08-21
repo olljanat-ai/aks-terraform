@@ -57,8 +57,16 @@ data "azapi_resource_list" "managed_clusters" {
 # for that, because it only comes into existence together with the cluster.
 resource "azurerm_user_assigned_identity" "this" {
   location            = var.location
-  name                = "${var.name}-identity"
+  name                = coalesce(var.managed_identity_name, "${var.name}-identity")
   resource_group_name = var.resource_group_name
+
+  # An identity cannot be renamed in place, so a new name replaces it. Building the replacement
+  # first means the cluster is updated from one live identity to another, rather than losing the
+  # one it has while the new one is created - which would leave a running cluster unable to reach
+  # the network it is attached to. The two names differ, so nothing collides while both exist.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Lets the cluster join nodes, load balancers and the integrated API server to the existing network.

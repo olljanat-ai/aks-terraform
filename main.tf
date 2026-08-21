@@ -121,12 +121,14 @@ module "aks" {
   addon_profile_azure_policy = {
     enabled = var.azure_policy_enabled
   }
-  # Container Insights. Managed identity authentication rather than the workspace key.
-  addon_profile_oms_agent = local.log_analytics_workspace_resource_id == null ? null : {
-    enabled = true
-    config = {
-      log_analytics_workspace_resource_id = local.log_analytics_workspace_resource_id
-      use_aad_auth                        = true
+  # Container Insights stays off: node and pod telemetry is collected by the third party agent that
+  # runs inside the cluster. AKS Automatic turns the add-on on by itself unless the request says
+  # otherwise, so it is disabled explicitly rather than left out. It goes through
+  # `addon_profiles_extra` because `addon_profile_oms_agent` insists on a workspace to name even
+  # when the add-on is being turned off.
+  addon_profiles_extra = {
+    omsagent = {
+      enabled = false
     }
   }
   api_server_access_profile = {
@@ -136,6 +138,13 @@ module "aks" {
     enable_vnet_integration            = var.api_server_subnet_name == null ? null : true
     private_dns_zone                   = local.private_dns_zone
     subnet_id                          = one(data.azurerm_subnet.api_server[*].id)
+  }
+  # Azure Monitor managed Prometheus. On by default on AKS Automatic as well, and replaced by the
+  # same third party metrics pipeline.
+  azure_monitor_profile = {
+    metrics = {
+      enabled = false
+    }
   }
   default_agent_pool = {
     availability_zones  = var.default_node_pool.availability_zones
@@ -177,6 +186,25 @@ module "aks" {
     node_subnet_id        = data.azurerm_subnet.node.id
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
+  # Ingress is handled by a third party controller installed into the cluster, so every managed
+  # ingress AKS offers is turned off: App Routing with its NGINX controller, the Istio based Gateway
+  # API implementation App Routing can front it with, and the managed Gateway API installation. All
+  # three are stated rather than left out, because AKS Automatic enables App Routing unless the
+  # create request says otherwise - and because the module cannot validate a partially filled
+  # ingress_profile: it reads through the nested objects and fails on the ones left null.
+  ingress_profile = {
+    gateway_api = {
+      installation = "Disabled"
+    }
+    web_app_routing = {
+      enabled = false
+      gateway_api_implementations = {
+        app_routing_istio = {
+          mode = "Disabled"
+        }
+      }
+    }
+  }
   kubernetes_version = var.kubernetes_version
   lock = var.lock_kind == null ? null : {
     kind = var.lock_kind

@@ -309,9 +309,12 @@ variable "log_analytics_workspace_resource_id" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Resource ID of an existing Log Analytics workspace. Setting it turns on Container Insights for node
-and pod telemetry and ships the control plane logs in `control_plane_log_categories` there. Left
-null, the cluster emits platform metrics only and nothing is billed for ingestion.
+Resource ID of an existing Log Analytics workspace. Setting it ships the control plane logs in
+`control_plane_log_categories` there, and gives `defender_enabled` somewhere to report to. Left
+null, nothing is sent to Azure Monitor and nothing is billed for ingestion.
+
+This does not turn on Container Insights: the in-cluster monitoring add-ons are disabled on every
+cluster, because node, pod and metrics telemetry is collected by a third party agent instead.
 DESCRIPTION
 
   validation {

@@ -28,8 +28,9 @@ private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 private_cluster_enabled = true
 # api_server_authorized_ip_ranges = ["203.0.113.0/24"]
 
-# Existing Log Analytics workspace for Container Insights and the control plane logs. Without one
-# the cluster keeps no record of what the API server was asked to do.
+# Existing Log Analytics workspace for the control plane logs. Without one the cluster keeps no
+# record of what the API server was asked to do. Container Insights, managed Prometheus and the
+# App Routing ingress controller are disabled on every cluster - third party solutions cover those.
 # log_analytics_workspace_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-monitoring/providers/Microsoft.OperationalInsights/workspaces/law-shared"
 # defender_enabled = true
 

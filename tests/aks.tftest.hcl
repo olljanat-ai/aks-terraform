@@ -178,6 +178,58 @@ run "cost_analysis_is_on_for_the_premium_tier" {
 }
 
 # ----------------------------------------------------------------------------------------------
+# Rapid7 remote scanner
+# ----------------------------------------------------------------------------------------------
+
+run "no_rapid7_grant_unless_a_principal_is_named" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_role_definition.rapid7_scanner) == 0
+    error_message = "A cluster that is not scanned should not carry a scanner role definition."
+  }
+  assert {
+    condition     = length(azurerm_role_assignment.rapid7_scanner) == 0
+    error_message = "A cluster that is not scanned should not grant anyone access to it."
+  }
+}
+
+run "rapid7_gets_exactly_the_permissions_it_documents_on_this_cluster_only" {
+  command = plan
+
+  variables {
+    rapid7_scanner_principal_id = "22222222-2222-2222-2222-222222222222"
+  }
+
+  assert {
+    condition = toset(azurerm_role_definition.rapid7_scanner[0].permissions[0].actions) == toset([
+      "Microsoft.ContainerService/managedClusters/listClusterUserCredential/action",
+      "Microsoft.ContainerService/managedClusters/read",
+    ])
+    error_message = "The control plane permissions should be the two Rapid7 documents, and nothing else."
+  }
+  assert {
+    condition = toset(azurerm_role_definition.rapid7_scanner[0].permissions[0].data_actions) == toset([
+      "Microsoft.ContainerService/managedClusters/*/read",
+      "Microsoft.ContainerService/managedClusters/authorization.k8s.io/subjectaccessreviews/write",
+    ])
+    error_message = "The in-cluster permissions should be the two Rapid7 documents, and nothing else."
+  }
+  assert {
+    condition     = azurerm_role_definition.rapid7_scanner[0].scope == data.azurerm_resource_group.this.id
+    error_message = "A custom role cannot be assignable at resource scope, so it belongs to the resource group."
+  }
+  assert {
+    condition     = azurerm_role_assignment.rapid7_scanner[0].scope == module.aks.resource_id
+    error_message = "The grant should reach this cluster only, not every cluster in the subscription."
+  }
+  assert {
+    condition     = azurerm_role_assignment.rapid7_scanner[0].principal_id == "22222222-2222-2222-2222-222222222222"
+    error_message = "The grant should go to the named scanner principal."
+  }
+}
+
+# ----------------------------------------------------------------------------------------------
 # Upgrade windows
 # ----------------------------------------------------------------------------------------------
 
@@ -275,6 +327,16 @@ run "rejects_an_authorized_range_that_is_not_a_cidr" {
   }
 
   expect_failures = [var.api_server_authorized_ip_ranges]
+}
+
+run "rejects_a_scanner_application_id_that_is_not_an_object_id" {
+  command = plan
+
+  variables {
+    rapid7_scanner_principal_id = "rapid7-insightcloudsec"
+  }
+
+  expect_failures = [var.rapid7_scanner_principal_id]
 }
 
 run "rejects_an_entra_group_name_where_an_object_id_belongs" {

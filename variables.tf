@@ -436,6 +436,25 @@ variable "private_dns_zone_resource_group_name" {
   description = "Resource group of the existing private DNS zone. Defaults to `resource_group_name`."
 }
 
+variable "rapid7_scanner_principal_id" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Object ID of the Rapid7 InsightCloudSec service principal in this tenant - the enterprise
+application behind the onboarded Azure account, not its application (client) ID. When set, the
+cluster grants it the custom role the [Kubernetes remote scanner][scanner] needs: read the cluster
+credentials, read every Kubernetes object and create subjectaccessreviews. Leave null on clusters
+that are not scanned.
+
+[scanner]: https://docs.rapid7.com/insightcloudsec/kubernetes-remote-scanner/
+DESCRIPTION
+
+  validation {
+    condition     = var.rapid7_scanner_principal_id == null || can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", coalesce(var.rapid7_scanner_principal_id, "")))
+    error_message = "rapid7_scanner_principal_id must be an object ID, which is a GUID. Read it with: az ad sp show --id <application-id> --query id --output tsv."
+  }
+}
+
 variable "role_assignment_propagation_delay" {
   type        = string
   default     = "60s"

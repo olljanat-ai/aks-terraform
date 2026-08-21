@@ -57,7 +57,7 @@ data "azapi_resource_list" "managed_clusters" {
 # for that, because it only comes into existence together with the cluster.
 resource "azurerm_user_assigned_identity" "this" {
   location            = var.location
-  name                = coalesce(var.managed_identity_name, "${var.name}-identity")
+  name                = local.managed_identity_name
   resource_group_name = var.resource_group_name
 
   # An identity cannot be renamed in place, so a new name replaces it. Building the replacement
@@ -66,6 +66,11 @@ resource "azurerm_user_assigned_identity" "this" {
   # the network it is attached to. The two names differ, so nothing collides while both exist.
   lifecycle {
     create_before_destroy = true
+
+    precondition {
+      condition     = local.location_code != ""
+      error_message = "No short code is known for ${var.location}, so the identity of ${var.name} cannot be named. Add it to local.location_codes in locals.tf."
+    }
   }
 }
 

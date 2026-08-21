@@ -13,9 +13,6 @@ sku_tier = "Standard"
 # Existing resource group.
 resource_group_name = "rg-aks-prototype"
 
-# Identity the cluster runs as, named id-<region code>-<environment>-<function>.
-managed_identity_name = "id-sec-prototype-aks-automatic"
-
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
 # The nodes go into snet-aks-nodes. The hosted system components need a subnet of their own - Azure
 # refuses a request that names one subnet for both - so snet-aks-system carries those and nothing

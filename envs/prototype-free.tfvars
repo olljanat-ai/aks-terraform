@@ -13,9 +13,6 @@ sku_tier = "Free"
 # Existing resource group.
 resource_group_name = "rg-aks-prototype"
 
-# Identity the cluster runs as, named id-<region code>-<environment>-<function>.
-managed_identity_name = "id-sec-prototype-aks-free"
-
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
 virtual_network_name = "vnet-aks-prototype"
 node_subnet_name     = "snet-aks-nodes"

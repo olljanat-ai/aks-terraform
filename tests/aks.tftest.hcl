@@ -163,6 +163,21 @@ run "automatic_can_still_be_scoped_down_by_hand" {
     network_role_assignment_scope = "subnet"
   }
 
+  # The mocked subnet data source hands out one ID for every subnet, which would collapse into a
+  # single assignment. Three distinct subnets is the point of this run, so they are named here.
+  override_data {
+    target = data.azurerm_subnet.system_node[0]
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test/subnets/snet-aks-system"
+    }
+  }
+  override_data {
+    target = data.azurerm_subnet.api_server[0]
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test/subnets/snet-aks-apiserver"
+    }
+  }
+
   expect_failures = [check.automatic_network_role_assignment_scope]
 
   assert {
@@ -178,6 +193,26 @@ run "base_keeps_the_subnet_scoped_assignments" {
   assert {
     condition     = keys(azurerm_role_assignment.network_contributor) == ["node_subnet"]
     error_message = "A Base cluster should keep the least privilege subnet assignments."
+  }
+}
+
+# The whole cluster can share a single subnet. Azure refuses a second assignment of the same role to
+# the same principal at the same scope, so the duplicate has to be collapsed rather than sent twice.
+run "one_subnet_in_two_roles_is_granted_once" {
+  command = plan
+
+  variables {
+    sku_name                      = "Automatic"
+    sku_tier                      = "Standard"
+    system_node_subnet_name       = "snet-aks-nodes"
+    network_role_assignment_scope = "subnet"
+  }
+
+  expect_failures = [check.automatic_network_role_assignment_scope, check.automatic_api_server_subnet]
+
+  assert {
+    condition     = length(azurerm_role_assignment.network_contributor) == 1
+    error_message = "A node subnet that is also the system node subnet should be granted exactly once."
   }
 }
 
@@ -614,18 +649,30 @@ run "rejects_a_maintenance_window_too_short_to_upgrade_in" {
   expect_failures = [var.maintenance_window]
 }
 
-run "rejects_automatic_without_the_subnets_it_requires" {
+run "rejects_automatic_without_a_system_node_subnet" {
   command = plan
 
   variables {
-    sku_name = "Automatic"
-    sku_tier = "Standard"
+    sku_name               = "Automatic"
+    sku_tier               = "Standard"
+    api_server_subnet_name = "snet-aks-apiserver"
   }
 
-  expect_failures = [
-    var.api_server_subnet_name,
-    var.system_node_subnet_name,
-  ]
+  expect_failures = [var.system_node_subnet_name]
+}
+
+# Microsoft documents the API server subnet as required for an Automatic cluster in an existing
+# network, but a cluster can be asked for without one - with a warning rather than a refusal.
+run "warns_about_automatic_without_api_server_vnet_integration" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    system_node_subnet_name = "snet-aks-system"
+  }
+
+  expect_failures = [check.automatic_api_server_subnet]
 }
 
 run "rejects_automatic_on_the_free_tier" {

@@ -246,6 +246,17 @@ check "api_server_exposure" {
   }
 }
 
+# Microsoft documents a delegated API server subnet as required for an AKS Automatic cluster in an
+# existing virtual network - the API server is injected into that subnet, and there is nowhere else
+# in the network for it to go. Terraform warns rather than refuses, because the requirement is
+# Microsoft's rather than something that can be checked here, and Azure has the final say.
+check "automatic_api_server_subnet" {
+  assert {
+    condition     = !local.is_automatic || var.api_server_subnet_name != null
+    error_message = "${var.name} is an AKS Automatic cluster in an existing virtual network with no api_server_subnet_name, so API Server VNet Integration is off. Microsoft documents a subnet delegated to Microsoft.ContainerService/managedClusters as required for this combination; Azure may refuse the cluster or leave it in Creating."
+  }
+}
+
 # Pods and services on a range that also belongs to the existing network have nowhere to route to.
 # Azure creates the cluster regardless and the damage only shows once something tries to talk across
 # it, so this is checked before the apply rather than discovered afterwards.

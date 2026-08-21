@@ -54,15 +54,18 @@ locals {
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = data.azurerm_subnet.node.id
   }
-  # The ranges the cluster will actually run on. They are the ones `network_profile` asks for only
-  # when the module sends a network profile at all; otherwise Azure fills in its own, and these are
-  # what it uses. Pinned here rather than left implicit, so the overlap check below has something to
-  # compare against.
-  aks_default_pod_cidr     = "100.102.0.0/16"
-  aks_default_service_cidr = "100.101.0.0/16"
-  effective_cluster_cidrs = compact(local.network_profile_is_sent
-    ? [var.network_profile.pod_cidr, var.network_profile.service_cidr]
-  : [local.aks_default_pod_cidr, local.aks_default_service_cidr])
+  # The pod and service ranges Azure assigns by itself when the create request carries no network
+  # profile of its own. This is a RECORD OF WHAT AKS DOES, not a setting: editing it changes nothing
+  # about the cluster, only what the overlap check below compares against. Change it only if Azure's
+  # own defaults change. To choose the ranges a cluster runs on, set network_profile.pod_cidr and
+  # network_profile.service_cidr - and note that they only reach Azure when the module sends the
+  # network profile at all, which the README's AKS Automatic section explains.
+  azure_assigned_cluster_cidrs = ["10.244.0.0/16", "10.0.0.0/16"]
+  # The ranges the cluster will actually run on, whichever of the two they came from.
+  effective_cluster_cidrs = local.network_profile_is_sent ? compact([
+    var.network_profile.pod_cidr,
+    var.network_profile.service_cidr,
+  ]) : local.azure_assigned_cluster_cidrs
   # Azure rejects a dnsPrefix when a custom private DNS zone is used and requires an fqdnSubdomain
   # instead. AKS Automatic derives both itself.
   fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)
@@ -77,11 +80,16 @@ locals {
   network_role_assignment_scopes = !var.create_role_assignments ? {} : (
     local.network_role_assignment_scope == "virtual_network"
     ? { virtual_network = data.azurerm_virtual_network.this.id }
-    : merge(
-      { node_subnet = data.azurerm_subnet.node.id },
-      var.system_node_subnet_name == null ? {} : { system_node_subnet = data.azurerm_subnet.system_node[0].id },
-      var.api_server_subnet_name == null ? {} : { api_server_subnet = data.azurerm_subnet.api_server[0].id },
-    )
+    # One entry per distinct subnet: the same subnet can carry more than one of these roles, and
+    # Azure refuses a second assignment of the same role to the same principal at the same scope.
+    : { for key, id in local.network_role_assignment_subnet_scopes : key => id
+      if key == sort([for other_key, other_id in local.network_role_assignment_subnet_scopes : other_key if other_id == id])[0]
+    }
+  )
+  network_role_assignment_subnet_scopes = merge(
+    { node_subnet = data.azurerm_subnet.node.id },
+    var.system_node_subnet_name == null ? {} : { system_node_subnet = data.azurerm_subnet.system_node[0].id },
+    var.api_server_subnet_name == null ? {} : { api_server_subnet = data.azurerm_subnet.api_server[0].id },
   )
   # Whether the module sends a `network_profile` at all. It drops the whole profile - the pod and
   # service ranges with it - for an Automatic cluster left on the default `loadBalancer` egress,

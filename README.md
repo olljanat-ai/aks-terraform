@@ -351,7 +351,12 @@ choice for a throwaway cluster and a poor one for anything else.
   reach network resources outside its own subnets.
 - The cluster uses a **user assigned identity** created by this module. AKS must be able to write
   records into the private DNS zone before the cluster exists, which a system assigned identity
-  cannot do.
+  cannot do. It is named `id-<region code>-<environment>-<function>` - for example
+  `id-sec-prototype-aks-automatic` - through `managed_identity_name`, which falls back to
+  `<name>-identity` when an environment does not set it. An identity cannot be renamed in place, so
+  changing it replaces the identity, its principal ID and its role assignments; the replacement is
+  built before the old one is removed, so the cluster is never left pointing at an identity that has
+  gone.
 - Azure requires an `fqdnSubdomain` instead of a `dnsPrefix` when a bring-your-own private DNS zone
   is used, so the module derives it from the cluster name.
 - Cluster **tags are not managed here**. Automation outside Terraform adjusts them, so the existing

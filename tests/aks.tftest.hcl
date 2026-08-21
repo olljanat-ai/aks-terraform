@@ -79,6 +79,38 @@ run "default_cluster_is_private_and_scoped_to_its_node_subnet" {
   }
 }
 
+run "the_identity_is_named_after_the_cluster_by_default" {
+  command = plan
+
+  assert {
+    condition     = azurerm_user_assigned_identity.this.name == "aks-test-identity"
+    error_message = "Without managed_identity_name the identity should keep the name derived from the cluster."
+  }
+}
+
+run "the_identity_name_can_be_given_directly" {
+  command = plan
+
+  variables {
+    managed_identity_name = "id-sec-prototype-aks-automatic"
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.this.name == "id-sec-prototype-aks-automatic"
+    error_message = "managed_identity_name should be used as given."
+  }
+}
+
+run "rejects_an_identity_name_azure_would_refuse" {
+  command = plan
+
+  variables {
+    managed_identity_name = "-id-sec-prototype"
+  }
+
+  expect_failures = [var.managed_identity_name]
+}
+
 run "wider_scope_grants_the_virtual_network_instead" {
   command = plan
 

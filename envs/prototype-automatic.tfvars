@@ -21,12 +21,8 @@ resource_group_name = "rg-aks-prototype"
 virtual_network_name    = "vnet-aks-prototype"
 node_subnet_name        = "snet-aks-nodes"
 system_node_subnet_name = "snet-aks-system"
+api_server_subnet_name  = "snet-aks-api"
 # virtual_network_resource_group_name = "rg-network"
-
-# No API Server VNet Integration: api_server_subnet_name is deliberately left unset, so the API
-# server is not injected into the network and no delegated subnet is needed. Terraform warns on
-# every plan, because Microsoft documents the subnet as required for an AKS Automatic cluster in an
-# existing virtual network - see the README before taking the warning as noise.
 
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"

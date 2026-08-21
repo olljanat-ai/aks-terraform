@@ -24,7 +24,7 @@ jobs:
     name: Format, validate and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -49,7 +49,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Installed from the pinned release rather than through an action, so that the version in the
       # workflow is the version that runs.

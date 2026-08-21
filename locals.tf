@@ -58,8 +58,8 @@ locals {
   # when the module sends a network profile at all; otherwise Azure fills in its own, and these are
   # what it uses. Pinned here rather than left implicit, so the overlap check below has something to
   # compare against.
-  aks_default_pod_cidr     = "10.244.0.0/16"
-  aks_default_service_cidr = "10.0.0.0/16"
+  aks_default_pod_cidr     = "100.102.0.0/16"
+  aks_default_service_cidr = "100.101.0.0/16"
   effective_cluster_cidrs = compact(local.network_profile_is_sent
     ? [var.network_profile.pod_cidr, var.network_profile.service_cidr]
   : [local.aks_default_pod_cidr, local.aks_default_service_cidr])

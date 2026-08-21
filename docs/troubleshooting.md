@@ -26,7 +26,9 @@ az aks show -g "$RG" -n "$CLUSTER" --query "{state:provisioningState, power:powe
 ```
 
 - `Creating` - the operation is still running. Watch it rather than starting another one.
-- `Failed` - Azure gave up too, and the reason is in the deployment operations below.
+- `Failed` - Azure gave up too. If the reason is `OperationTimeout`, see
+  [Azure returned `OperationTimeout`](#azure-returned-operationtimeout); otherwise it is in the
+  deployment operations below.
 - `Succeeded` - the cluster finished after Terraform stopped watching. Skip to
   [Getting Terraform back in sync](#getting-terraform-back-in-sync).
 
@@ -65,6 +67,75 @@ watch -n 30 "az aks show -g $RG -n $CLUSTER --query provisioningState -o tsv"
 
   The node resource group (`MC_*`) goes with it. Check that it is gone before applying again; a
   leftover one makes the next create fail on a name conflict.
+
+## Azure returned `OperationTimeout`
+
+```
+Error code: OperationTimeout. Message: "Operation timeout, please retry."
+```
+
+This is **Azure giving up, not Terraform**. The create request was accepted, AKS worked on it, the
+cluster did not converge inside the resource provider's own deadline, and the operation was failed
+off. Raising `cluster_timeouts` does nothing for this - Terraform was still waiting when the answer
+came back.
+
+Nor is it a reason to retry as the message suggests. `OperationTimeout` on a **first create** is
+almost never transient: something in the request or the network stopped the cluster reaching a
+working state, and a second attempt meets the same wall. Retry is worth one shot only if the
+previous attempt got visibly further.
+
+### Narrow it down by what changed
+
+`prototype-free` builds in the same virtual network and the same node subnet. What an Automatic
+cluster adds is the system node subnet, the API server subnet, and API Server VNet Integration - so
+the fault is almost certainly in that delta rather than in something both share. Outbound from the
+node subnet and node-to-control-plane are already proven by the Base cluster working.
+
+Look at how far it got before it was failed off:
+
+```sh
+# Did any node ever appear? The node resource group is created early, the scale sets later.
+az resource list -g "MC_${RG}_${CLUSTER}_swedencentral" -o table
+
+# Did the API server get injected into its subnet? With VNet integration it takes addresses there.
+az network vnet subnet show -g "$RG" --vnet-name vnet-aks-prototype -n snet-aks-api \
+  --query "{prefix:addressPrefix, delegations:delegations[].serviceName, ips:ipConfigurations[].id}" -o json
+
+# What the resource provider recorded, which is more specific than the error Terraform surfaced.
+az monitor activity-log list -g "$RG" --offset 6h \
+  --query "[?contains(resourceId, '$CLUSTER')].{op:operationName.value, status:status.value, sub:subStatus.value, msg:properties.statusMessage}" -o json
+```
+
+- **No node resource group, no addresses in the API server subnet** - the failure is early. Suspect
+  the subnets: delegation, size, or an NSG.
+- **Nodes exist but never became ready** - they could not reach the API server or the internet.
+  Suspect NSG rules between the node subnets and the API server subnet, or a route table.
+
+### Isolate the configuration from the network
+
+The fastest way to tell whether the request is at fault or the network is to build an Automatic
+cluster next to it with none of this configuration's opinions - no disabled add-ons, no disabled
+ingress, nothing but the three subnets and the identity:
+
+```sh
+SUB=$(az account show --query id -o tsv)
+NET=/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/virtualNetworks/vnet-aks-prototype
+
+az aks create -g "$RG" -n aks-probe --location swedencentral --sku automatic --no-ssh-key \
+  --apiserver-subnet-id  "$NET/subnets/snet-aks-api" \
+  --node-subnet-id       "$NET/subnets/snet-aks-nodes" \
+  --system-node-subnet-id "$NET/subnets/snet-aks-system" \
+  --assign-identity "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sec-prototype-aks-automatic"
+```
+
+- **The probe succeeds** - the network is fine and something this configuration sends is not. The
+  candidates are the settings AKS Automatic turns on by itself and this configuration turns back
+  off: Container Insights, managed Prometheus, App Routing and the Gateway API installation,
+  Defender. Put them back one at a time.
+- **The probe times out the same way** - the request is not the problem. It is the subnets or the
+  network policy around them, and the checks under [Common causes](#common-causes) apply.
+
+Delete the probe when it has answered the question: `az aks delete -g "$RG" -n aks-probe --yes`.
 
 ## Getting Terraform back in sync
 

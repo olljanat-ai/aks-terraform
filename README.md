@@ -238,10 +238,41 @@ What this configuration drops for the Automatic SKU, because Azure refuses or ig
 | Setting | What happens |
 | --- | --- |
 | `default_node_pool` | Dropped in full apart from the pool name. Azure sizes, scales and rolls the pools itself, and the node count falls back to the three nodes the module defaults to. |
-| `network_profile` | Dropped by the module, including `pod_cidr` and `service_cidr`. **Azure picks its own ranges** - check that they do not overlap the address space of the existing network. |
+| `network_profile` | Dropped by the module **in full, including `pod_cidr` and `service_cidr`**, while `outbound_type` is `loadBalancer`. Azure then uses its own ranges - `10.244.0.0/16` for pods, `10.0.0.0/16` for services - and they cannot be changed once the cluster exists. See [Address ranges on Automatic](#address-ranges-on-automatic). |
 | `azure_policy_enabled` | Ignored. Automatic always runs the Azure Policy add-on. |
 | `disable_local_accounts` | **Not sent.** The module's Automatic request has no place for it, so unlike a `Base` cluster an Automatic cluster is created with local accounts enabled. Turn them off afterwards with `az aks update --disable-local-accounts`. |
 | `kubernetes_version` | Sent as a separate update after the cluster exists, not as part of the create. |
+
+### Address ranges on Automatic
+
+An Automatic cluster on the default `loadBalancer` egress runs on Azure's ranges, not on the ones
+`network_profile` asks for:
+
+```
+Pod CIDR        10.244.0.0/16
+Service CIDR    10.0.0.0/16
+DNS service IP  10.0.0.10
+```
+
+This is the AVM module rather than AKS. `podCidr`, `serviceCidr` and `dnsServiceIP` are three of the
+four network properties the Automatic SKU *does* accept, but the module nulls the whole network
+profile before it filters it, for any Automatic cluster whose `outbound_type` is `loadBalancer`
+(`locals.network_profile.tf` in version 0.8.1). Nothing is sent, so Azure fills in its defaults.
+
+It matters because `10.0.0.0/16` collides with a great many existing networks, and **the ranges are
+fixed at creation** - a cluster on the wrong ones has to be rebuilt. Terraform warns on every plan
+when the effective ranges overlap the address space of the virtual network, whichever SKU they came
+from.
+
+There are three ways out, in order of how much they cost:
+
+1. **Leave it**, once you have confirmed the defaults do not overlap your network. This is the
+   sensible answer for a prototype.
+2. **Set `outbound_type` to something other than `loadBalancer`.** The profile is then sent and the
+   configured ranges survive - but `userDefinedRouting` needs a route table and somewhere for egress
+   to go, so this is a real change to the network rather than a flag.
+3. **Carry a patched module.** The condition is one expression; upstream has no newer release with
+   it fixed as of 0.8.1.
 
 Two more things worth knowing:
 

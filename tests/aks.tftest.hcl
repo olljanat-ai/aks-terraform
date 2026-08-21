@@ -13,7 +13,8 @@ mock_provider "azurerm" {
   }
   mock_data "azurerm_virtual_network" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
+      address_space = ["172.19.0.0/16"]
+      id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
     }
   }
   mock_data "azurerm_subnet" {
@@ -260,6 +261,128 @@ run "rejects_a_cluster_timeout_that_is_not_a_duration" {
   }
 
   expect_failures = [var.cluster_timeouts]
+}
+
+# The module drops the whole network profile for an Automatic cluster on loadBalancer egress, so the
+# ranges it runs on are Azure's rather than the ones network_profile asks for. They cannot be changed
+# once the cluster exists, which is why this is worth catching before the apply.
+run "automatic_on_load_balancer_egress_falls_back_to_the_azure_ranges" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    api_server_subnet_name  = "snet-aks-apiserver"
+    system_node_subnet_name = "snet-aks-system"
+  }
+
+  assert {
+    condition     = !local.network_profile_is_sent
+    error_message = "The module sends no network profile for this combination, so the configured ranges do not apply."
+  }
+  assert {
+    condition     = local.effective_cluster_cidrs == tolist(["10.244.0.0/16", "10.0.0.0/16"])
+    error_message = "The cluster should be reported as running on Azure's default pod and service ranges."
+  }
+}
+
+# Any other egress type and the profile is sent, filtered down to the four properties Automatic
+# accepts - which include the two ranges.
+run "automatic_off_load_balancer_egress_keeps_the_configured_ranges" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    api_server_subnet_name  = "snet-aks-apiserver"
+    system_node_subnet_name = "snet-aks-system"
+    network_profile = {
+      outbound_type = "userDefinedRouting"
+    }
+  }
+
+  assert {
+    condition     = local.network_profile_is_sent
+    error_message = "Anything other than loadBalancer egress should send the network profile."
+  }
+  assert {
+    condition     = local.effective_cluster_cidrs == tolist(["100.201.0.0/16", "100.202.0.0/16"])
+    error_message = "The configured ranges should survive for this combination."
+  }
+}
+
+run "base_always_keeps_the_configured_ranges" {
+  command = plan
+
+  assert {
+    condition     = local.network_profile_is_sent && local.effective_cluster_cidrs == tolist(["100.201.0.0/16", "100.202.0.0/16"])
+    error_message = "A Base cluster is sent the network profile it asked for."
+  }
+}
+
+run "an_address_space_clear_of_the_cluster_ranges_raises_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(local.overlapping_cluster_cidrs) == 0
+    error_message = "100.201.0.0/16 and 100.202.0.0/16 do not overlap 172.19.0.0/16."
+  }
+}
+
+# Azure's default service range is 10.0.0.0/16, which collides with a great many existing networks -
+# and an Automatic cluster on loadBalancer egress gets it whether or not network_profile says so.
+run "warns_when_the_azure_ranges_collide_with_the_existing_network" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    api_server_subnet_name  = "snet-aks-apiserver"
+    system_node_subnet_name = "snet-aks-system"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.this
+    values = {
+      id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
+      address_space = ["10.0.0.0/16"]
+    }
+  }
+
+  expect_failures = [check.cluster_cidrs_do_not_overlap_the_network]
+}
+
+# A shorter prefix on either side still counts as an overlap.
+run "warns_when_a_supernet_of_the_cluster_ranges_is_in_use" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_virtual_network.this
+    values = {
+      id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
+      address_space = ["100.200.0.0/14"]
+    }
+  }
+
+  expect_failures = [check.cluster_cidrs_do_not_overlap_the_network]
+}
+
+# An IPv6 range is skipped rather than compared against an IPv4 one.
+run "an_ipv6_address_space_is_not_compared_against_the_ipv4_ranges" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_virtual_network.this
+    values = {
+      id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
+      address_space = ["fd00::/48", "172.19.0.0/16"]
+    }
+  }
+
+  assert {
+    condition     = length(local.overlapping_cluster_cidrs) == 0
+    error_message = "An IPv6 range should neither match an IPv4 one nor break the comparison."
+  }
 }
 
 run "cost_analysis_stays_off_on_the_free_tier" {

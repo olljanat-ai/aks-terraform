@@ -137,14 +137,21 @@ az provider register --namespace Microsoft.PolicyInsights   # if it is not "Regi
 
 ### Overlapping address ranges
 
-The Automatic SKU does not accept the `pod_cidr` and `service_cidr` from `network_profile` - the
-module drops them and Azure picks its own defaults. If those defaults overlap the address space of
-the existing virtual network, the cluster cannot route and never becomes ready:
+An Automatic cluster on `loadBalancer` egress is sent no network profile at all, so it runs on
+Azure's `10.244.0.0/16` pod range and `10.0.0.0/16` service range rather than on the ones
+`network_profile` asks for. See the README for why, and for the ways out. Pods and services on a
+range the existing network also uses have nowhere to route to.
+
+Terraform warns about this on every plan, but to check a cluster that already exists:
 
 ```sh
 az network vnet show -g "$RG" -n vnet-aks-prototype --query addressSpace.addressPrefixes -o tsv
-az aks show -g "$RG" -n "$CLUSTER" --query "networkProfile.{pod:podCidr, service:serviceCidr}" -o json
+az aks show -g "$RG" -n "$CLUSTER" \
+  --query "networkProfile.{pod:podCidr, service:serviceCidr, dns:dnsServiceIP}" -o json
 ```
+
+**These cannot be changed on an existing cluster.** A cluster on colliding ranges has to be deleted
+and recreated, so it is worth confirming before the first apply rather than after.
 
 ### Compute quota
 

@@ -54,6 +54,15 @@ locals {
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = data.azurerm_subnet.node.id
   }
+  # The ranges the cluster will actually run on. They are the ones `network_profile` asks for only
+  # when the module sends a network profile at all; otherwise Azure fills in its own, and these are
+  # what it uses. Pinned here rather than left implicit, so the overlap check below has something to
+  # compare against.
+  aks_default_pod_cidr     = "10.244.0.0/16"
+  aks_default_service_cidr = "10.0.0.0/16"
+  effective_cluster_cidrs = compact(local.network_profile_is_sent
+    ? [var.network_profile.pod_cidr, var.network_profile.service_cidr]
+  : [local.aks_default_pod_cidr, local.aks_default_service_cidr])
   # Azure rejects a dnsPrefix when a custom private DNS zone is used and requires an fqdnSubdomain
   # instead. AKS Automatic derives both itself.
   fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)
@@ -74,6 +83,26 @@ locals {
       var.api_server_subnet_name == null ? {} : { api_server_subnet = data.azurerm_subnet.api_server[0].id },
     )
   )
+  # Whether the module sends a `network_profile` at all. It drops the whole profile - the pod and
+  # service ranges with it - for an Automatic cluster left on the default `loadBalancer` egress,
+  # even though podCidr, serviceCidr and dnsServiceIP are on the short list of properties the
+  # Automatic SKU does accept. Anything else, and the profile is sent.
+  network_profile_is_sent = !(local.is_automatic && var.network_profile.outbound_type == "loadBalancer")
+  # Cluster-internal ranges that collide with the address space of the existing network. Two CIDRs
+  # overlap when they share a network address at the shorter of their two prefix lengths. IPv6
+  # ranges are skipped rather than compared against IPv4 ones.
+  overlapping_cluster_cidrs = [
+    for pair in setproduct(
+      [for range in data.azurerm_virtual_network.this.address_space : range if !strcontains(range, ":")],
+      local.effective_cluster_cidrs
+    ) : "${pair[1]} overlaps ${pair[0]}"
+    if try(
+      cidrhost(format("%s/%d", cidrhost(pair[0], 0), min(tonumber(split("/", pair[0])[1]), tonumber(split("/", pair[1])[1]))), 0)
+      ==
+      cidrhost(format("%s/%d", cidrhost(pair[1], 0), min(tonumber(split("/", pair[0])[1]), tonumber(split("/", pair[1])[1]))), 0),
+      false
+    )
+  ]
   private_dns_zone                     = var.private_cluster_enabled ? (local.use_byo_private_dns_zone ? one(data.azurerm_private_dns_zone.this[*].id) : "system") : null
   private_dns_zone_resource_group_name = coalesce(var.private_dns_zone_resource_group_name, var.resource_group_name)
   use_byo_private_dns_zone             = var.private_cluster_enabled && var.private_dns_zone_name != null

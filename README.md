@@ -37,7 +37,9 @@ These must exist before running Terraform:
 
 The identity running Terraform needs `Contributor` on the resource group and, unless
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
-private DNS zone.
+private DNS zone. Setting `rapid7_scanner_principal_id` additionally needs
+`Microsoft.Authorization/roleDefinitions/write` on the resource group, which `Contributor` does not
+carry - `User Access Administrator` or `Role Based Access Control Administrator` does.
 
 ## Usage
 
@@ -103,6 +105,59 @@ through the Azure control plane instead:
 az aks command invoke --resource-group <resource_group_name> \
   --name "$(terraform output -raw name)" --command "kubectl get nodes"
 ```
+
+## Rapid7 cluster scanning
+
+Rapid7 InsightCloudSec scans these clusters with its [Kubernetes remote scanner][r7scanner], which
+runs nothing inside the cluster: it asks the AKS control plane for a kubeconfig and then reads the
+cluster over the Kubernetes API. Azure RBAC decides what that gets it, so onboarding a cluster is
+one role assignment - the object ID of the InsightCloudSec service principal, per environment:
+
+```hcl
+rapid7_scanner_principal_id = "00000000-0000-0000-0000-000000000000"
+```
+
+That is the **object ID of the enterprise application** in this tenant, not the application (client)
+ID the Rapid7 console shows. Read one from the other:
+
+```sh
+az ad sp show --id <application-id> --query id --output tsv
+```
+
+Terraform then creates a custom role, `Rapid7 Kubernetes Scanner (<cluster name>)`, and assigns it
+to that principal **on the cluster**. It carries exactly the four permissions Rapid7 documents and
+nothing else:
+
+| Permission | Kind | What the scanner does with it |
+| --- | --- | --- |
+| `Microsoft.ContainerService/managedClusters/read` | Control plane | Find the cluster and read its configuration. |
+| `.../listClusterUserCredential/action` | Control plane | Download a kubeconfig. Local accounts are off, so it is an Entra one and grants nothing by itself. |
+| `Microsoft.ContainerService/managedClusters/*/read` | In-cluster | Read every Kubernetes object kind, secrets included - the findings are about their configuration. |
+| `.../authorization.k8s.io/subjectaccessreviews/write` | In-cluster | Post a `SubjectAccessReview` to work out what it may look at before it starts. A write only in the API sense: the request is answered, nothing is stored. |
+
+The read is total and it does include secrets, which is what an agentless scanner needs to report on
+them. There is no write anywhere: the scanner cannot create, change or delete anything in the
+cluster.
+
+Two differences from Rapid7's own instructions, both deliberate:
+
+- Rapid7 creates the role at **subscription** scope and assigns it there, which grants read access
+  to every cluster in the subscription at once. Here the assignment is on the cluster, so onboarding
+  one cluster onboards one cluster. A custom role cannot be *assignable* at resource scope, so the
+  definition itself still lives on the resource group - the definition grants nothing on its own.
+- The role is created **per cluster**, and its name carries the cluster name, because role
+  definition names are unique across the tenant and each environment applies its own state.
+
+Leave `rapid7_scanner_principal_id` unset on clusters that are not scanned; nothing is created then.
+
+Remember the network path. The scanner reaches the cluster over ports **443 and 6443**, and the
+cluster is private by default - a private API server is not reachable from Rapid7's hosted platform,
+however the permissions are set. Either scan from an InsightCloudSec deployment inside the virtual
+network or peered to it, or make the cluster public and put Rapid7's addresses in
+`api_server_authorized_ip_ranges`. Terraform cannot check this, so a wrong answer here shows up as a
+scanner that authenticates and then times out.
+
+[r7scanner]: https://docs.rapid7.com/insightcloudsec/kubernetes-remote-scanner/
 
 ## Upgrade window
 

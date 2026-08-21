@@ -17,7 +17,7 @@ crash.*.log
 *.tfvars.json
 
 # Environment definitions are committed. They name existing infrastructure, never secrets.
-!environments/*.tfvars
+!envs/*.tfvars
 
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in

@@ -7,6 +7,9 @@ locals {
   # Tags the cluster already carries in Azure, or null while it does not exist yet or carries none.
   # Feeding them back keeps the tags out of the plan instead of having Terraform delete them.
   cluster_tags = try(data.azapi_resource_list.managed_clusters.output.tags, null)
+  # Cost analysis breaks the cluster spend down by namespace and deployment in Azure Cost
+  # Management. Azure sells it with the paid tiers only and refuses the request on Free.
+  cost_analysis_enabled = var.sku_tier != "Free"
   # Azure rejects a dnsPrefix when a custom private DNS zone is used and requires an fqdnSubdomain
   # instead. AKS Automatic derives both itself.
   fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)

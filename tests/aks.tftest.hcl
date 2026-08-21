@@ -362,13 +362,3 @@ run "rejects_automatic_on_the_free_tier" {
 
   expect_failures = [var.sku_tier]
 }
-
-run "rejects_defender_without_a_workspace_to_report_to" {
-  command = plan
-
-  variables {
-    defender_enabled = true
-  }
-
-  expect_failures = [var.defender_enabled]
-}

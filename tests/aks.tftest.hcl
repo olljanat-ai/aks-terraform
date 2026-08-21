@@ -79,36 +79,83 @@ run "default_cluster_is_private_and_scoped_to_its_node_subnet" {
   }
 }
 
-run "the_identity_is_named_after_the_cluster_by_default" {
-  command = plan
-
-  assert {
-    condition     = azurerm_user_assigned_identity.this.name == "aks-test-identity"
-    error_message = "Without managed_identity_name the identity should keep the name derived from the cluster."
-  }
-}
-
-run "the_identity_name_can_be_given_directly" {
+# id-<region code>-<environment>-<function>, worked out rather than stated: the environment is
+# lifted out of the cluster name and put in front of what the cluster is.
+run "the_identity_name_is_built_from_the_cluster_name_and_the_region" {
   command = plan
 
   variables {
-    managed_identity_name = "id-sec-prototype-aks-automatic"
+    name = "aks-prototype-free"
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.this.name == "id-sec-prototype-aks-free"
+    error_message = "aks-prototype-free in swedencentral should be run by id-sec-prototype-aks-free."
+  }
+}
+
+run "an_automatic_cluster_is_named_apart_from_its_sibling" {
+  command = plan
+
+  variables {
+    name = "aks-prototype-automatic"
   }
 
   assert {
     condition     = azurerm_user_assigned_identity.this.name == "id-sec-prototype-aks-automatic"
-    error_message = "managed_identity_name should be used as given."
+    error_message = "Two clusters in one environment must not end up sharing an identity name."
   }
 }
 
-run "rejects_an_identity_name_azure_would_refuse" {
+run "a_cluster_name_with_nothing_after_the_environment_keeps_the_short_form" {
   command = plan
 
   variables {
-    managed_identity_name = "-id-sec-prototype"
+    name = "aks-prod"
   }
 
-  expect_failures = [var.managed_identity_name]
+  assert {
+    condition     = azurerm_user_assigned_identity.this.name == "id-sec-prod-aks"
+    error_message = "A name with no distinguishing tail should stop after the function."
+  }
+}
+
+run "a_cluster_name_with_nothing_to_split_has_no_environment_to_lift" {
+  command = plan
+
+  variables {
+    name = "cluster"
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.this.name == "id-sec-cluster"
+    error_message = "A single segment name has no environment, so the name follows the region directly."
+  }
+}
+
+run "the_region_follows_the_location" {
+  command = plan
+
+  variables {
+    location = "westeurope"
+    name     = "aks-prod-main"
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.this.name == "id-weu-prod-aks-main"
+    error_message = "The region code should come from location, not from swedencentral by habit."
+  }
+}
+
+# Guessing a code for an unknown region would put an off-convention name on a real identity.
+run "refuses_a_region_with_no_short_code" {
+  command = plan
+
+  variables {
+    location = "moonbase1"
+  }
+
+  expect_failures = [azurerm_user_assigned_identity.this]
 }
 
 run "wider_scope_grants_the_virtual_network_instead" {

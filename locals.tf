@@ -66,6 +66,50 @@ locals {
     var.network_profile.pod_cidr,
     var.network_profile.service_cidr,
   ]) : local.azure_assigned_cluster_cidrs
+  # Short code for the region, for the identity name below. Azure has no standard for these, so this
+  # is the estate's own convention rather than something derivable - a region that is not listed here
+  # gets added here. The identity is refused rather than named with a guess.
+  location_code = lookup(local.location_codes, var.location, "")
+  location_codes = {
+    australiaeast      = "aue"
+    brazilsouth        = "brs"
+    canadacentral      = "cac"
+    centralindia       = "inc"
+    centralus          = "cus"
+    eastasia           = "ea"
+    eastus             = "eus"
+    eastus2            = "eus2"
+    francecentral      = "frc"
+    germanywestcentral = "gwc"
+    japaneast          = "jpe"
+    koreacentral       = "krc"
+    northeurope        = "neu"
+    norwayeast         = "noe"
+    polandcentral      = "plc"
+    southafricanorth   = "san"
+    southcentralus     = "scus"
+    southeastasia      = "sea"
+    spaincentral       = "spc"
+    swedencentral      = "sec"
+    switzerlandnorth   = "szn"
+    uaenorth           = "aen"
+    uksouth            = "uks"
+    ukwest             = "ukw"
+    westeurope         = "weu"
+    westus2            = "wus2"
+    westus3            = "wus3"
+  }
+  # `id-<region code>-<environment>-<function>`, worked out from the cluster name and the region
+  # rather than stated per environment. A cluster name reads <what it is>-<environment>-<which one>,
+  # so `aks-prototype-free` in swedencentral is run by `id-sec-prototype-aks-free`: the environment
+  # moves to the front of the function, and everything past it distinguishes the cluster from its
+  # siblings in the same environment. A name with nothing to split has no environment to lift out,
+  # and becomes `id-<region code>-<name>`.
+  managed_identity_name = length(local.name_segments) < 2 ? join("-", ["id", local.location_code, var.name]) : join("-", concat(
+    ["id", local.location_code, local.name_segments[1], local.name_segments[0]],
+    slice(local.name_segments, 2, length(local.name_segments)),
+  ))
+  name_segments = split("-", var.name)
   # Azure rejects a dnsPrefix when a custom private DNS zone is used and requires an fqdnSubdomain
   # instead. AKS Automatic derives both itself.
   fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)

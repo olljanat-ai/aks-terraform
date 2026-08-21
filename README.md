@@ -138,30 +138,47 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 
 [maintenance]: https://learn.microsoft.com/azure/aks/planned-maintenance
 
-## Monitoring
+## Monitoring and ingress
 
-Point `log_analytics_workspace_resource_id` at an existing Log Analytics workspace to turn on
-[Container Insights][insights] for node and pod telemetry and to ship the control plane logs there:
+Cluster telemetry and ingress are handled by third party solutions running inside the cluster, so
+the Azure add-ons that would otherwise duplicate them are turned **off on every cluster**, without a
+variable to turn them back on:
+
+| Disabled | What it would have done |
+| --- | --- |
+| [Container Insights][insights] (`omsagent`) | Ships node and pod telemetry to a Log Analytics workspace. |
+| [Azure Monitor managed Prometheus][prometheus] | Scrapes cluster metrics into an Azure Monitor workspace. |
+| [Application Routing][approuting] (`webAppRouting`) | Installs and manages the default NGINX ingress controller. |
+
+They are disabled explicitly rather than simply left unconfigured, because **AKS Automatic enables
+all three by itself** unless the create request says otherwise.
+
+What remains of Azure Monitor is the control plane diagnostic setting, and it is opt-in. Point
+`log_analytics_workspace_resource_id` at an existing Log Analytics workspace to ship the control
+plane logs there:
 
 ```hcl
 log_analytics_workspace_resource_id = "/subscriptions/<subscription>/resourceGroups/rg-monitoring/providers/Microsoft.OperationalInsights/workspaces/law-shared"
 ```
 
 The control plane keeps no history of its own, so without this nothing records what the API server
-was asked to do. The default categories are the ones AKS recommends - `kube-apiserver`,
-`kube-audit-admin`, `kube-controller-manager`, `cluster-autoscaler` and `guard`. `kube-audit-admin`
-holds the write operations of the full `kube-audit` category at a fraction of the volume; add
-`kube-audit` to `control_plane_log_categories` only when read operations must be audited as well.
+was asked to do - and it is not something an in-cluster agent can collect for you. The default
+categories are the ones AKS recommends - `kube-apiserver`, `kube-audit-admin`,
+`kube-controller-manager`, `cluster-autoscaler` and `guard`. `kube-audit-admin` holds the write
+operations of the full `kube-audit` category at a fraction of the volume; add `kube-audit` to
+`control_plane_log_categories` only when read operations must be audited as well.
 
-`defender_enabled = true` adds Microsoft Defender for Containers threat detection on top, billed per
-vCPU hour. Both are off by default: nothing is ingested, and nothing is billed, until a workspace is
-named.
+`defender_enabled = true` adds Microsoft Defender for Containers threat detection, which reports to
+the same workspace. Both are off by default: nothing is ingested, and nothing is billed, until a
+workspace is named.
 
 The **Azure Policy add-on** is on by default (`azure_policy_enabled`), so policy definitions
 assigned to the subscription or resource group are enforced inside the cluster rather than merely
 reported on. AKS Automatic always runs it.
 
+[approuting]: https://learn.microsoft.com/azure/aks/app-routing
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
+[prometheus]: https://learn.microsoft.com/azure/azure-monitor/essentials/prometheus-metrics-overview
 
 ## Node pool upgrades
 

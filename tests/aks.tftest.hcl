@@ -142,6 +142,41 @@ run "automatic_grants_every_subnet_it_uses" {
   }
 }
 
+run "cost_analysis_stays_off_on_the_free_tier" {
+  command = plan
+
+  assert {
+    condition     = !local.cost_analysis_enabled
+    error_message = "Azure refuses cost analysis on the Free tier, so a Free cluster must not ask for it."
+  }
+}
+
+run "cost_analysis_is_on_for_the_standard_tier" {
+  command = plan
+
+  variables {
+    sku_tier = "Standard"
+  }
+
+  assert {
+    condition     = local.cost_analysis_enabled
+    error_message = "A paid tier cluster should have cost analysis enabled."
+  }
+}
+
+run "cost_analysis_is_on_for_the_premium_tier" {
+  command = plan
+
+  variables {
+    sku_tier = "Premium"
+  }
+
+  assert {
+    condition     = local.cost_analysis_enabled
+    error_message = "Premium is a paid tier too, so cost analysis should be enabled there as well."
+  }
+}
+
 # ----------------------------------------------------------------------------------------------
 # Upgrade windows
 # ----------------------------------------------------------------------------------------------

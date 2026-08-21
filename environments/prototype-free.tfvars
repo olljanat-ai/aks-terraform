@@ -10,6 +10,7 @@ name     = "aks-prototype-free"
 location = "swedencentral"
 
 sku_name = "Base"
+# Free carries no uptime SLA and no cost analysis - Azure sells that with the paid tiers only.
 sku_tier = "Free"
 
 # Existing resource group.

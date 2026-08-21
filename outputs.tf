@@ -46,6 +46,14 @@ output "private_fqdn" {
   value       = module.aks.private_fqdn
 }
 
+output "rapid7_scanner_role_definition_id" {
+  description = <<DESCRIPTION
+Resource ID of the custom role granted to the Rapid7 InsightCloudSec remote scanner on this
+cluster. Null when `rapid7_scanner_principal_id` is unset.
+DESCRIPTION
+  value       = one(azurerm_role_definition.rapid7_scanner[*].role_definition_resource_id)
+}
+
 output "resource_id" {
   description = "Resource ID of the AKS cluster."
   value       = module.aks.resource_id

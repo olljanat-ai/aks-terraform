@@ -86,23 +86,27 @@ previous attempt got visibly further.
 
 ### Narrow it down by what changed
 
-`prototype-free` builds in the same virtual network and the same node subnet. What an Automatic
-cluster adds is the SKU itself and the system node subnet - so the fault is almost certainly in that
-delta rather than in something both share. Outbound from the node subnet and node-to-control-plane
-are already proven by the Base cluster working.
+`envs/prototype-automatic.tfvars` **brings no network at all** - AKS creates one for the cluster
+inside the node resource group - so the existing network, its subnets and the role assignments on
+them are not in the picture, and neither is anything under [Common causes](#common-causes) that
+talks about them. What is left is the SKU itself, the settings this configuration turns off, and the
+subscription around them: quota, `Microsoft.PolicyInsights`, and the region.
 
-The API server subnet and API Server VNet Integration used to be part of that delta, and are the
-reason `envs/prototype-automatic.tfvars` now sets `api_server_vnet_integration_enabled = false`. If
-the environment you are looking at has turned it back on, that is the first thing to take out again.
+That is what the arrangement is for. The bring-your-own subnets and the API server injected into a
+delegated one are what the cluster kept failing on, while `prototype-free` builds in the existing
+network without trouble. **If the environment you are looking at has been put back on the existing
+network** - `virtual_network_name` and the subnets named again - then the network is back in the
+picture, and taking it out again is the fastest way to find out whether it is the cause.
 
 Look at how far it got before it was failed off:
 
 ```sh
-# Did any node ever appear? The node resource group is created early, the scale sets later.
+# Did any node ever appear? The node resource group is created early, the scale sets later. It also
+# holds the virtual network AKS made, for a cluster that brought none.
 az resource list -g "MC_${RG}_${CLUSTER}_swedencentral" -o table
 
-# Only with API Server VNet Integration on: did the API server get injected into its subnet? It
-# takes addresses there as it comes up.
+# Only on an existing network with API Server VNet Integration on: did the API server get injected
+# into its subnet? It takes addresses there as it comes up.
 az network vnet subnet show -g "$RG" --vnet-name vnet-aks-prototype -n snet-aks-api \
   --query "{prefix:addressPrefix, delegations:delegations[].serviceName, ips:ipConfigurations[].id}" -o json
 
@@ -111,38 +115,50 @@ az monitor activity-log list -g "$RG" --offset 6h \
   --query "[?contains(resourceId, '$CLUSTER')].{op:operationName.value, status:status.value, sub:subStatus.value, msg:properties.statusMessage}" -o json
 ```
 
-- **No node resource group** - the failure is early. Suspect the subnets: size, an NSG, or, where
-  the integration is on, the delegation of the API server subnet and the addresses it never took.
-- **Nodes exist but never became ready** - they could not reach the API server or the internet.
-  Suspect a route table, or NSG rules on the node subnets - and on the API server subnet as well
-  while the integration is on.
+- **No node resource group** - the failure is early, before AKS built anything. On an existing
+  network, suspect the subnets: size, an NSG, or, where the integration is on, the delegation of the
+  API server subnet and the addresses it never took. With no network of your own, the subnets cannot
+  be it: look at the activity log for a quota or provider rejection instead.
+- **Nodes exist but never became ready** - they could not reach the API server or the internet. On
+  an existing network, suspect a route table or NSG rules on the node subnets, and on the API server
+  subnet while the integration is on. With no network of your own there is nothing of yours in the
+  path, so this points at the cluster or the region rather than at the estate.
 
 ### Isolate the configuration from the network
 
-The fastest way to tell whether the request is at fault or the network is to build an Automatic
-cluster next to it with none of this configuration's opinions - no disabled add-ons, no disabled
-ingress, nothing but the subnets and the identity:
+The fastest way to tell whether the request is at fault is to build an Automatic cluster next to it
+with none of this configuration's opinions - no disabled add-ons, no disabled ingress, nothing but
+the identity, exactly as `envs/prototype-automatic.tfvars` asks for it:
 
 ```sh
 SUB=$(az account show --query id -o tsv)
-NET=/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/virtualNetworks/vnet-aks-prototype
 
 az aks create -g "$RG" -n aks-probe --location swedencentral --sku automatic --no-ssh-key \
-  --node-subnet-id        "$NET/subnets/snet-aks-nodes" \
-  --system-node-subnet-id "$NET/subnets/snet-aks-system" \
   --assign-identity "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sec-prototype-aks-automatic"
 ```
 
-- **The probe succeeds** - the network is fine and something this configuration sends is not. The
-  candidates are the settings AKS Automatic turns on by itself and this configuration turns back
-  off: Container Insights, managed Prometheus, App Routing and the Gateway API installation,
-  Defender. Put them back one at a time.
-- **The probe times out the same way** - the request is not the problem. It is the subnets or the
-  network policy around them, and the checks under [Common causes](#common-causes) apply.
+- **The probe succeeds** - something this configuration sends is the problem. The candidates are the
+  settings AKS Automatic turns on by itself and this configuration turns back off: Container
+  Insights, managed Prometheus, App Routing and the Gateway API installation, Defender. Put them
+  back one at a time.
+- **The probe times out the same way** - the request is not the problem, and neither is the network,
+  since neither cluster brought one. That leaves the subscription and the region: quota,
+  `Microsoft.PolicyInsights`, and whether Automatic is offered there at all.
 
-Add `--apiserver-subnet-id "$NET/subnets/snet-aks-api"` to probe the configuration that
-`envs/prototype-automatic.tfvars` no longer asks for. A probe that comes up without that line and
-hangs with it is the integration rather than anything this configuration sends.
+To probe the existing-network arrangement instead - the one this environment came off - add the
+subnets back to the same command, and the API server subnet after that:
+
+```sh
+NET=/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/virtualNetworks/vnet-aks-prototype
+
+  --node-subnet-id        "$NET/subnets/snet-aks-nodes" \
+  --system-node-subnet-id "$NET/subnets/snet-aks-system" \
+  --apiserver-subnet-id   "$NET/subnets/snet-aks-api"
+```
+
+A probe that comes up without those lines and hangs with them is the network, or the API server
+injected into it, rather than anything this configuration sends - which is the finding the current
+`envs/prototype-automatic.tfvars` is built on.
 
 Delete the probe when it has answered the question: `az aks delete -g "$RG" -n aks-probe --yes`.
 
@@ -175,9 +191,16 @@ perfectly reasonable answer for a prototype. It is not for anything with state i
 
 ## Common causes
 
+Everything here except `Microsoft.PolicyInsights` is about a cluster attached to an existing
+network. A cluster that brings none - which `envs/prototype-automatic.tfvars` now does - has no
+subnets to get wrong, nothing to be granted and nothing of yours in the path, so skip to the
+provider registration and to what the activity log says.
+
 ### Missing `Network Contributor` on the virtual network (AKS Automatic)
 
-The most likely reason an Automatic cluster hangs where an equivalent `Base` cluster succeeds.
+The most likely reason an Automatic cluster on an existing network hangs where an equivalent `Base`
+cluster succeeds. Not applicable to a cluster that brings no network: AKS owns the one it creates,
+and this configuration asks for no assignment at all in that case.
 Microsoft documents `Network Contributor` **on the virtual network** for this SKU, because node
 autoprovisioning creates node pools that assignments on the individual subnets do not cover. The
 cluster resource is created, the nodes never come up, and the operation runs until it times out.
@@ -196,14 +219,15 @@ fails with an authorization error on a subnet.
 
 ### The API server subnet is not delegated, is too small, or is missing
 
-Only when API Server VNet Integration is on. `envs/prototype-automatic.tfvars` turns it off through
-`api_server_vnet_integration_enabled = false`, so there is no API server subnet to get wrong there -
-the cluster is created without one and the API server stays off the network.
+Only when API Server VNet Integration is on, which needs an existing network to inject the API
+server into. `envs/prototype-automatic.tfvars` has neither, so there is no API server subnet to get
+wrong there.
 
-Microsoft documents the subnet as required for this SKU in an existing virtual network, so a cluster
-that is refused or hangs *without* one is a real possibility, and the README says what to weigh
-against it. Check the delegation and the size before concluding that, though: an integration that
-was on and pointed at a subnet AKS could not use looks the same from the outside.
+Microsoft documents the subnet as required for this SKU in an existing virtual network, so an
+Automatic cluster *on such a network* that is refused or hangs without one is a real possibility -
+the README says what to weigh against it. Check the delegation and the size before concluding that,
+though: an integration that was on and pointed at a subnet AKS could not use looks the same from the
+outside.
 
 When there is one:
 
@@ -233,7 +257,12 @@ Azure's `10.244.0.0/16` pod range and `10.0.0.0/16` service range rather than on
 `network_profile` asks for. See the README for why, and for the ways out. Pods and services on a
 range the existing network also uses have nowhere to route to.
 
-Terraform warns about this on every plan, but to check a cluster that already exists:
+A cluster that brings no network has no existing address space to collide with, so Terraform has
+nothing to compare and stays quiet - but the ranges are still Azure's, and still fixed at creation.
+They are worth knowing before anything is ever peered to that cluster.
+
+Terraform warns about this on every plan where there is a network, but to check a cluster that
+already exists:
 
 ```sh
 az network vnet show -g "$RG" -n vnet-aks-prototype --query addressSpace.addressPrefixes -o tsv

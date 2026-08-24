@@ -4,6 +4,10 @@ locals {
   aks_api_version = "2026-03-01"
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
+  # Whether the cluster is attached to a network that already exists. Without one, AKS creates and
+  # manages a virtual network for it inside the node resource group: no subnet is looked up, there
+  # is nothing to grant the cluster identity, and every bring-your-own network field stays null.
+  byo_network = var.virtual_network_name != null
   # Whether the API server is joined to the existing network. It takes both halves: the integration
   # turned on and a subnet to inject the API server into. Either one missing leaves the API server
   # where AKS puts it by default, and nothing about the subnet reaches Azure.
@@ -36,7 +40,7 @@ locals {
     type                = null
     upgrade_settings    = null
     vm_size             = null
-    vnet_subnet_id      = data.azurerm_subnet.node.id
+    vnet_subnet_id      = one(data.azurerm_subnet.node[*].id)
     } : {
     availability_zones  = var.default_node_pool.availability_zones
     count_of            = var.default_node_pool.node_count
@@ -56,7 +60,7 @@ locals {
       node_soak_duration_in_minutes = var.default_node_pool.node_soak_duration_minutes
     }
     vm_size        = var.default_node_pool.vm_size
-    vnet_subnet_id = data.azurerm_subnet.node.id
+    vnet_subnet_id = one(data.azurerm_subnet.node[*].id)
   }
   # The pod and service ranges Azure assigns by itself when the create request carries no network
   # profile of its own. This is a RECORD OF WHAT AKS DOES, not a setting: editing it changes nothing
@@ -125,9 +129,9 @@ locals {
   network_role_assignment_scope = coalesce(var.network_role_assignment_scope, local.is_automatic ? "virtual_network" : "subnet")
   # Scopes the cluster identity is granted Network Contributor on. Keyed by role rather than by
   # resource ID, so that renaming a subnet does not churn the state addresses of the assignments.
-  network_role_assignment_scopes = !var.create_role_assignments ? {} : (
+  network_role_assignment_scopes = !var.create_role_assignments || !local.byo_network ? {} : (
     local.network_role_assignment_scope == "virtual_network"
-    ? { virtual_network = data.azurerm_virtual_network.this.id }
+    ? { virtual_network = data.azurerm_virtual_network.this[0].id }
     # One entry per distinct subnet: the same subnet can carry more than one of these roles, and
     # Azure refuses a second assignment of the same role to the same principal at the same scope.
     : { for key, id in local.network_role_assignment_subnet_scopes : key => id
@@ -135,7 +139,7 @@ locals {
     }
   )
   network_role_assignment_subnet_scopes = merge(
-    { node_subnet = data.azurerm_subnet.node.id },
+    { node_subnet = one(data.azurerm_subnet.node[*].id) },
     var.system_node_subnet_name == null ? {} : { system_node_subnet = data.azurerm_subnet.system_node[0].id },
     !local.api_server_vnet_integration ? {} : { api_server_subnet = data.azurerm_subnet.api_server[0].id },
   )
@@ -149,7 +153,7 @@ locals {
   # ranges are skipped rather than compared against IPv4 ones.
   overlapping_cluster_cidrs = [
     for pair in setproduct(
-      [for range in data.azurerm_virtual_network.this.address_space : range if !strcontains(range, ":")],
+      [for range in local.virtual_network_address_space : range if !strcontains(range, ":")],
       local.effective_cluster_cidrs
     ) : "${pair[1]} overlaps ${pair[0]}"
     if try(
@@ -162,5 +166,7 @@ locals {
   private_dns_zone                     = var.private_cluster_enabled ? (local.use_byo_private_dns_zone ? one(data.azurerm_private_dns_zone.this[*].id) : "system") : null
   private_dns_zone_resource_group_name = coalesce(var.private_dns_zone_resource_group_name, var.resource_group_name)
   use_byo_private_dns_zone             = var.private_cluster_enabled && var.private_dns_zone_name != null
-  virtual_network_resource_group_name  = coalesce(var.virtual_network_resource_group_name, var.resource_group_name)
+  # Address space of the existing network, or nothing to collide with when AKS brings the network.
+  virtual_network_address_space       = local.byo_network ? data.azurerm_virtual_network.this[0].address_space : []
+  virtual_network_resource_group_name = coalesce(var.virtual_network_resource_group_name, var.resource_group_name)
 }

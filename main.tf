@@ -4,12 +4,18 @@ data "azurerm_resource_group" "this" {
   name = var.resource_group_name
 }
 
+# The existing network and its subnets, looked up only when the cluster is attached to one. A
+# cluster that brings no network has AKS create one for it, and none of these have anything to read.
 data "azurerm_virtual_network" "this" {
+  count = local.byo_network ? 1 : 0
+
   name                = var.virtual_network_name
   resource_group_name = local.virtual_network_resource_group_name
 }
 
 data "azurerm_subnet" "node" {
+  count = local.byo_network ? 1 : 0
+
   name                 = var.node_subnet_name
   resource_group_name  = local.virtual_network_resource_group_name
   virtual_network_name = var.virtual_network_name
@@ -109,7 +115,7 @@ resource "azurerm_role_assignment" "private_dns_zone_contributor" {
 # effect when the cluster is created seconds later, which fails the apply with an authorization error
 # on the subnet. Waiting once on creation is cheaper than a half-created cluster.
 resource "time_sleep" "role_assignment_propagation" {
-  count = var.create_role_assignments && var.role_assignment_propagation_delay != "0s" ? 1 : 0
+  count = var.create_role_assignments && (local.byo_network || local.use_byo_private_dns_zone) && var.role_assignment_propagation_delay != "0s" ? 1 : 0
 
   create_duration = var.role_assignment_propagation_delay
   triggers = {
@@ -165,10 +171,11 @@ module "aks" {
   dns_prefix         = var.name
   enable_telemetry   = var.enable_telemetry
   fqdn_subdomain     = local.fqdn_subdomain
-  # AKS Automatic places its hosted system components in a subnet of the existing network.
+  # AKS Automatic places its hosted system components in a subnet of the existing network. A cluster
+  # that brings no network sends no profile at all, and AKS hosts them in the network it creates.
   hosted_system_profile = local.is_automatic && var.system_node_subnet_name != null ? {
     enabled               = true
-    node_subnet_id        = data.azurerm_subnet.node.id
+    node_subnet_id        = one(data.azurerm_subnet.node[*].id)
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
   # Ingress is handled by a third party controller installed into the cluster, so every managed
@@ -266,10 +273,11 @@ check "api_server_exposure" {
 #
 # An environment that has turned the integration off through api_server_vnet_integration_enabled is
 # left alone: the missing subnet is the decision there, not an omission, and a warning on every plan
-# would only train people to ignore this one.
+# would only train people to ignore this one. So is a cluster that brings no network - the
+# requirement is about an existing virtual network, and there is none.
 check "automatic_api_server_subnet" {
   assert {
-    condition     = !local.is_automatic || !var.api_server_vnet_integration_enabled || var.api_server_subnet_name != null
+    condition     = !local.is_automatic || !local.byo_network || !var.api_server_vnet_integration_enabled || var.api_server_subnet_name != null
     error_message = "${var.name} is an AKS Automatic cluster in an existing virtual network with no api_server_subnet_name, so API Server VNet Integration is off. Microsoft documents a subnet delegated to Microsoft.ContainerService/managedClusters as required for this combination; Azure may refuse the cluster or leave it in Creating. Set api_server_vnet_integration_enabled = false to state that this is deliberate."
   }
 }
@@ -285,16 +293,17 @@ check "automatic_api_server_subnet" {
 check "cluster_cidrs_do_not_overlap_the_network" {
   assert {
     condition     = length(local.overlapping_cluster_cidrs) == 0
-    error_message = "The cluster-internal ranges of ${var.name} collide with the address space of ${var.virtual_network_name}: ${join(", ", local.overlapping_cluster_cidrs)}.${local.network_profile_is_sent ? " Move network_profile.pod_cidr and network_profile.service_cidr out of the way." : " These are Azure's defaults, because an AKS Automatic cluster on loadBalancer egress is sent no network profile at all - see the AKS Automatic section of the README."}"
+    error_message = "The cluster-internal ranges of ${var.name} collide with the address space of ${coalesce(var.virtual_network_name, "the existing network")}: ${join(", ", local.overlapping_cluster_cidrs)}.${local.network_profile_is_sent ? " Move network_profile.pod_cidr and network_profile.service_cidr out of the way." : " These are Azure's defaults, because an AKS Automatic cluster on loadBalancer egress is sent no network profile at all - see the AKS Automatic section of the README."}"
   }
 }
 
 # AKS Automatic cannot bring its own node pools up without Network Contributor on the whole virtual
 # network. This only fires when an environment overrides the scope back down to the subnets, since
-# that is otherwise the default for Base clusters only.
+# that is otherwise the default for Base clusters only. A cluster with no network of its own grants
+# nothing and needs nothing granted: AKS owns the network it creates.
 check "automatic_network_role_assignment_scope" {
   assert {
-    condition     = !local.is_automatic || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
+    condition     = !local.is_automatic || !local.byo_network || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
     error_message = "${var.name} is an AKS Automatic cluster scoped to its subnets. Node autoprovisioning creates node pools the subnet assignments do not cover, and the cluster can sit in Creating until it times out. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
   }
 }

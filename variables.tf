@@ -22,12 +22,21 @@ variable "name" {
 
 variable "node_subnet_name" {
   type        = string
-  description = "Name of the existing subnet the cluster nodes are placed in."
-  nullable    = false
+  default     = null
+  description = <<DESCRIPTION
+Name of the existing subnet the cluster nodes are placed in. Required together with
+`virtual_network_name`, and left unset with it for a cluster that brings no network of its own.
+DESCRIPTION
 
   validation {
-    condition     = length(trimspace(var.node_subnet_name)) > 0
+    condition     = var.node_subnet_name == null || length(trimspace(coalesce(var.node_subnet_name, ""))) > 0
     error_message = "node_subnet_name must not be empty."
+  }
+  # The two are one decision. A subnet without its network cannot be looked up, and a network with
+  # no node subnet named in it has nowhere to put the nodes.
+  validation {
+    condition     = (var.virtual_network_name == null) == (var.node_subnet_name == null)
+    error_message = "virtual_network_name and node_subnet_name go together: name both to attach the cluster to an existing network, or leave both unset to let AKS create and manage a virtual network of its own."
   }
 }
 
@@ -44,11 +53,18 @@ variable "resource_group_name" {
 
 variable "virtual_network_name" {
   type        = string
-  description = "Name of the existing virtual network the cluster is attached to."
-  nullable    = false
+  default     = null
+  description = <<DESCRIPTION
+Name of the existing virtual network the cluster is attached to, together with `node_subnet_name`.
+
+Leave both unset for a cluster that brings no network at all: AKS then creates and manages a virtual
+network for it inside the node resource group, and every bring-your-own subnet here stays empty. The
+cluster is then reachable only from that network, which the node resource group lockdown makes hard
+to peer or link - see the README. `envs/prototype-automatic.tfvars` is on that arrangement.
+DESCRIPTION
 
   validation {
-    condition     = length(trimspace(var.virtual_network_name)) > 0
+    condition     = var.virtual_network_name == null || length(trimspace(coalesce(var.virtual_network_name, ""))) > 0
     error_message = "virtual_network_name must not be empty."
   }
 }
@@ -86,6 +102,10 @@ DESCRIPTION
   validation {
     condition     = var.api_server_vnet_integration_enabled || var.api_server_subnet_name == null
     error_message = "api_server_subnet_name names a subnet for an API server that is not joined to the network. Leave it unset while api_server_vnet_integration_enabled = false, or set that back to true to use the subnet."
+  }
+  validation {
+    condition     = var.virtual_network_name != null || var.api_server_subnet_name == null
+    error_message = "api_server_subnet_name names a subnet of an existing virtual network, and this cluster brings none. Name virtual_network_name and node_subnet_name as well, or leave the API server where AKS puts it."
   }
 }
 
@@ -189,7 +209,8 @@ variable "create_role_assignments" {
   description = <<DESCRIPTION
 Create the role assignments the cluster identity needs on the existing network and private DNS zone.
 Set to `false` when the assignments are managed elsewhere - the deployment then requires no
-`Microsoft.Authorization/roleAssignments/write` permission.
+`Microsoft.Authorization/roleAssignments/write` permission. A cluster that brings no network has no
+network assignments to create either way.
 DESCRIPTION
   nullable    = false
 }
@@ -448,7 +469,8 @@ Scope of the `Network Contributor` assignment the cluster identity gets on the e
   itself and works at virtual network scope, not at the scope of the subnets named here. Also needed
   on a `Base` cluster that has to reach network resources outside its own subnets.
 
-Left unset, this follows `sku_name`. Ignored when `create_role_assignments = false`.
+Left unset, this follows `sku_name`. Ignored when `create_role_assignments = false`, and when the
+cluster brings no network for the identity to be granted anything on.
 DESCRIPTION
 
   validation {
@@ -498,7 +520,8 @@ variable "role_assignment_propagation_delay" {
 How long to wait after creating the role assignments before creating the cluster. Azure RBAC is
 eventually consistent, so a cluster created the moment the assignment returns is regularly refused
 access to the subnet it is supposed to join. Set to `"0s"` to skip the wait, for example when the
-assignments already existed. Ignored when `create_role_assignments = false`.
+assignments already existed. Ignored when there are no assignments to wait for - either
+`create_role_assignments = false`, or a cluster that brings no network.
 DESCRIPTION
   nullable    = false
 
@@ -552,19 +575,24 @@ variable "system_node_subnet_name" {
   default     = null
   description = <<DESCRIPTION
 Name of the existing subnet used by the hosted system components of an AKS Automatic cluster.
-Required for AKS Automatic, ignored otherwise. **It must be a different subnet from
+Required for AKS Automatic **in an existing virtual network**, ignored otherwise - a cluster that
+brings no network hosts them in the one AKS creates for it. **It must be a different subnet from
 `node_subnet_name`** - Azure hosts the system components separately from the nodes and refuses a
 request that names one subnet for both.
 DESCRIPTION
 
   validation {
-    condition     = var.sku_name != "Automatic" || var.system_node_subnet_name != null
+    condition     = var.sku_name != "Automatic" || var.virtual_network_name == null || var.system_node_subnet_name != null
     error_message = "AKS Automatic on an existing network requires system_node_subnet_name."
+  }
+  validation {
+    condition     = var.virtual_network_name != null || var.system_node_subnet_name == null
+    error_message = "system_node_subnet_name names a subnet of an existing virtual network, and this cluster brings none. AKS places the hosted system components in the network it creates for itself."
   }
   # Azure answers this one with `400 InvalidParameter: systemNodeByoSubnetId and nodeByoSubnetId
   # must be different subnets`, so there is no point sending it.
   validation {
-    condition     = var.sku_name != "Automatic" || var.system_node_subnet_name != var.node_subnet_name
+    condition     = var.sku_name != "Automatic" || var.system_node_subnet_name == null || var.system_node_subnet_name != var.node_subnet_name
     error_message = "system_node_subnet_name must name a different subnet from node_subnet_name. AKS places the hosted system components of an Automatic cluster in their own subnet and rejects a request that gives it the node subnet."
   }
 }

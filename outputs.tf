@@ -4,13 +4,20 @@ output "fqdn" {
 }
 
 output "identity_principal_id" {
-  description = "Principal ID of the user assigned identity used by the cluster."
-  value       = azurerm_user_assigned_identity.this.principal_id
+  description = <<DESCRIPTION
+Principal ID of the identity the cluster runs as - the user assigned identity created here, or the
+cluster's own system assigned one where Azure requires that instead. Grant it access to resources
+the cluster has to reach.
+DESCRIPTION
+  value       = local.system_assigned_identity ? module.aks.identity_principal_id : one(azurerm_user_assigned_identity.this[*].principal_id)
 }
 
 output "identity_resource_id" {
-  description = "Resource ID of the user assigned identity used by the cluster."
-  value       = azurerm_user_assigned_identity.this.id
+  description = <<DESCRIPTION
+Resource ID of the user assigned identity used by the cluster. Null for a cluster running on a
+system assigned identity, which is part of the cluster rather than a resource of its own.
+DESCRIPTION
+  value       = one(azurerm_user_assigned_identity.this[*].id)
 }
 
 output "kubelet_identity_object_id" {

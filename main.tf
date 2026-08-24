@@ -61,7 +61,13 @@ data "azapi_resource_list" "managed_clusters" {
 # AKS needs an identity that already exists when the cluster is created, so that it can be granted
 # access to the pre-existing network and private DNS zone. A system assigned identity cannot be used
 # for that, because it only comes into existence together with the cluster.
+#
+# A cluster that brings no network has nothing of the sort to be granted, and an Automatic one is
+# refused by Azure unless it runs on a system assigned identity - so there the cluster's own identity
+# is used and none is created here.
 resource "azurerm_user_assigned_identity" "this" {
+  count = local.system_assigned_identity ? 0 : 1
+
   location            = var.location
   name                = local.managed_identity_name
   resource_group_name = var.resource_group_name
@@ -80,6 +86,14 @@ resource "azurerm_user_assigned_identity" "this" {
   }
 }
 
+# The identity became countable when clusters that bring no network arrived. Without this, every
+# cluster that already has one would have it destroyed and rebuilt under the new address - and a
+# running cluster pointing at an identity that no longer exists loses access to its network.
+moved {
+  from = azurerm_user_assigned_identity.this
+  to   = azurerm_user_assigned_identity.this[0]
+}
+
 # Lets the cluster join nodes, load balancers and the integrated API server to the existing network.
 # A Base cluster is scoped to the subnets it uses; AKS Automatic is scoped to the whole virtual
 # network, because node autoprovisioning needs it. Either can be overridden through
@@ -87,7 +101,7 @@ resource "azurerm_user_assigned_identity" "this" {
 resource "azurerm_role_assignment" "network_contributor" {
   for_each = local.network_role_assignment_scopes
 
-  principal_id                     = azurerm_user_assigned_identity.this.principal_id
+  principal_id                     = azurerm_user_assigned_identity.this[0].principal_id
   scope                            = each.value
   role_definition_name             = "Network Contributor"
   skip_service_principal_aad_check = true
@@ -103,9 +117,9 @@ moved {
 
 # Lets the cluster register the API server record in the existing private DNS zone.
 resource "azurerm_role_assignment" "private_dns_zone_contributor" {
-  count = var.create_role_assignments && local.use_byo_private_dns_zone ? 1 : 0
+  count = local.create_private_dns_zone_assignment ? 1 : 0
 
-  principal_id                     = azurerm_user_assigned_identity.this.principal_id
+  principal_id                     = azurerm_user_assigned_identity.this[0].principal_id
   scope                            = data.azurerm_private_dns_zone.this[0].id
   role_definition_name             = "Private DNS Zone Contributor"
   skip_service_principal_aad_check = true
@@ -115,7 +129,7 @@ resource "azurerm_role_assignment" "private_dns_zone_contributor" {
 # effect when the cluster is created seconds later, which fails the apply with an authorization error
 # on the subnet. Waiting once on creation is cheaper than a half-created cluster.
 resource "time_sleep" "role_assignment_propagation" {
-  count = var.create_role_assignments && (local.byo_network || local.use_byo_private_dns_zone) && var.role_assignment_propagation_delay != "0s" ? 1 : 0
+  count = (length(local.network_role_assignment_scopes) > 0 || local.create_private_dns_zone_assignment) && var.role_assignment_propagation_delay != "0s" ? 1 : 0
 
   create_duration = var.role_assignment_propagation_delay
   triggers = {
@@ -201,9 +215,11 @@ module "aks" {
   lock = var.lock_kind == null ? null : {
     kind = var.lock_kind
   }
+  # The identity created above, or the cluster's own where Azure insists on one - see
+  # local.system_assigned_identity. The splat is empty in that case, which leaves `SystemAssigned`.
   managed_identities = {
-    system_assigned            = false
-    user_assigned_resource_ids = [azurerm_user_assigned_identity.this.id]
+    system_assigned            = local.system_assigned_identity
+    user_assigned_resource_ids = azurerm_user_assigned_identity.this[*].id
   }
   # Cost analysis, which is the one Azure side telemetry these clusters do keep: it feeds Azure Cost
   # Management rather than Azure Monitor, and it is the only place the spend of a namespace or a
@@ -305,6 +321,16 @@ check "automatic_network_role_assignment_scope" {
   assert {
     condition     = !local.is_automatic || !local.byo_network || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
     error_message = "${var.name} is an AKS Automatic cluster scoped to its subnets. Node autoprovisioning creates node pools the subnet assignments do not cover, and the cluster can sit in Creating until it times out. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
+  }
+}
+
+# A bring-your-own private DNS zone is registered by the cluster identity, which has to hold Private
+# DNS Zone Contributor before the cluster is created. A system assigned identity does not exist until
+# then, so the grant cannot be made in advance and the create can fail to register its record.
+check "byo_private_dns_zone_has_an_identity_to_grant" {
+  assert {
+    condition     = !local.system_assigned_identity || !local.use_byo_private_dns_zone
+    error_message = "${var.name} is a private AKS Automatic cluster on the network AKS manages, so it runs on a system assigned identity that does not exist until the cluster does - and ${coalesce(var.private_dns_zone_name, "the private DNS zone")} cannot be granted to it in advance. Use the AKS-managed zone (leave private_dns_zone_name unset), or attach the cluster to an existing virtual network, which lets it run on the identity created here."
   }
 }
 

@@ -326,6 +326,28 @@ put them in. With no network there is also nothing to grant: no `Network Contrib
 created whatever `network_role_assignment_scope` says, and the propagation wait is skipped along
 with it.
 
+**An Automatic cluster on this arrangement runs on a system assigned identity**, and no user assigned
+one is created for it. Azure requires it - a request that pairs the Automatic SKU with the network
+AKS manages and an identity of your own comes back as:
+
+```
+400 BadRequest / AKSAutomaticSKUFeatureValidationError
+Managed cluster 'Automatic' SKU should use SAMI when using managed vnet.
+```
+
+It follows from what the identity is for. It exists to be granted access to resources that already
+exist, before the cluster is created; a cluster that brings no network has nothing of the sort. The
+`identity_principal_id` output carries the cluster's own principal instead, so anything it has to
+reach - a container registry, a key vault - is granted after the cluster is created rather than
+before. `identity_resource_id` is null there, since a system assigned identity is part of the
+cluster rather than a resource of its own.
+
+The one thing that does not survive it is a **bring-your-own private DNS zone**: the cluster has to
+hold `Private DNS Zone Contributor` before it is created in order to register its record, and there
+is no principal to grant in advance. Terraform warns when the two are asked for together. A Base
+cluster with no network is unaffected - Azure's rule is Automatic's alone, so it keeps the user
+assigned identity and the grant with it.
+
 **`envs/prototype-automatic.tfvars` is on this arrangement.** Attaching an Automatic cluster to the
 existing network is what has been failing here - the bring-your-own subnets and the API server
 injected into a delegated one - while `prototype-free` builds in that same network without trouble,
@@ -340,9 +362,9 @@ What it costs:
   it. A private cluster on this arrangement is reachable through `az aks command invoke` and little
   else, which is why `prototype-automatic` runs a **public** API server and should carry a real
   `api_server_authorized_ip_ranges` allowlist rather than `0.0.0.0/0`.
-- **A bring-your-own private DNS zone is of limited use**, for the same reason: the zone can be
-  created and the cluster identity granted on it, but nothing outside can resolve through it without
-  a link to the AKS-managed network.
+- **A bring-your-own private DNS zone does not work here at all** on the Automatic SKU, per the
+  identity note above - and would be of limited use regardless, since nothing outside could resolve
+  through it without a link to the AKS-managed network.
 - **Azure picks the address ranges**, as it does for any Automatic cluster on `loadBalancer` egress
   - see [Address ranges on Automatic](#address-ranges-on-automatic). There is no existing address
   space for them to collide with, so Terraform's overlap check has nothing to compare and stays
@@ -436,12 +458,16 @@ choice for a throwaway cluster and a poor one for anything else.
   carries on, and the cluster is left in `Creating` with nothing in state pointing at it. An AKS
   Automatic cluster in an existing network regularly needs more than half an hour.
 - The cluster identity gets `Network Contributor` **on the subnets it uses**, not on the whole
-  virtual network - the least privilege AKS documents for a bring-your-own network. Set
+  virtual network - the least privilege AKS documents for a bring-your-own network. A cluster that
+  brings no network is granted nothing at all: AKS owns the one it creates. Set
   `network_role_assignment_scope = "virtual_network"` for the wider grant when the cluster has to
   reach network resources outside its own subnets.
-- The cluster uses a **user assigned identity** created by this module. AKS must be able to write
-  records into the private DNS zone before the cluster exists, which a system assigned identity
-  cannot do. Its name is **worked out, not configured**: `id-<region code>-<environment>-<function>`,
+- The cluster uses a **user assigned identity** created by this module, except where it brings no
+  network and runs on the Automatic SKU - see
+  [Clusters without a network of their own](#clusters-without-a-network-of-their-own). The identity
+  exists because AKS has to be granted the existing network and the private DNS zone *before* the
+  cluster is created, which a system assigned identity cannot be: it does not exist until the cluster
+  does. Its name is **worked out, not configured**: `id-<region code>-<environment>-<function>`,
   built from the cluster name and the region. A cluster name reads `<what it is>-<environment>-<which
   one>`, so `aks-prototype-free` in `swedencentral` is run by `id-sec-prototype-aks-free`. The region
   codes are the estate's own convention rather than anything Azure defines, so they live in

@@ -66,7 +66,7 @@ run "default_cluster_is_private_and_scoped_to_its_node_subnet" {
     error_message = "A cluster with one node subnet should get exactly one Network Contributor assignment."
   }
   assert {
-    condition     = azurerm_role_assignment.network_contributor["node_subnet"].scope == data.azurerm_subnet.node.id
+    condition     = azurerm_role_assignment.network_contributor["node_subnet"].scope == data.azurerm_subnet.node[0].id
     error_message = "The assignment should be scoped to the node subnet, not to the virtual network."
   }
   assert {
@@ -166,7 +166,7 @@ run "wider_scope_grants_the_virtual_network_instead" {
   }
 
   assert {
-    condition     = azurerm_role_assignment.network_contributor["virtual_network"].scope == data.azurerm_virtual_network.this.id
+    condition     = azurerm_role_assignment.network_contributor["virtual_network"].scope == data.azurerm_virtual_network.this[0].id
     error_message = "network_role_assignment_scope = \"virtual_network\" should grant the whole network."
   }
 }
@@ -224,7 +224,7 @@ run "automatic_is_granted_the_whole_virtual_network" {
     error_message = "AKS Automatic should get one assignment on the virtual network, not one per subnet."
   }
   assert {
-    condition     = azurerm_role_assignment.network_contributor["virtual_network"].scope == data.azurerm_virtual_network.this.id
+    condition     = azurerm_role_assignment.network_contributor["virtual_network"].scope == data.azurerm_virtual_network.this[0].id
     error_message = "The assignment should be scoped to the virtual network."
   }
 }
@@ -320,7 +320,7 @@ run "automatic_sends_no_base_cluster_node_pool_settings" {
     error_message = "AKS Automatic should be sent no VM size, count, autoscaler, pool type or upgrade settings."
   }
   assert {
-    condition     = local.default_agent_pool.vnet_subnet_id == data.azurerm_subnet.node.id
+    condition     = local.default_agent_pool.vnet_subnet_id == data.azurerm_subnet.node[0].id
     error_message = "AKS Automatic still places its nodes in the node subnet."
   }
 }
@@ -451,7 +451,7 @@ run "warns_when_the_azure_ranges_collide_with_the_existing_network" {
   }
 
   override_data {
-    target = data.azurerm_virtual_network.this
+    target = data.azurerm_virtual_network.this[0]
     values = {
       id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
       address_space = ["10.0.0.0/16"]
@@ -466,7 +466,7 @@ run "warns_when_a_supernet_of_the_cluster_ranges_is_in_use" {
   command = plan
 
   override_data {
-    target = data.azurerm_virtual_network.this
+    target = data.azurerm_virtual_network.this[0]
     values = {
       id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
       address_space = ["100.200.0.0/14"]
@@ -481,7 +481,7 @@ run "an_ipv6_address_space_is_not_compared_against_the_ipv4_ranges" {
   command = plan
 
   override_data {
-    target = data.azurerm_virtual_network.this
+    target = data.azurerm_virtual_network.this[0]
     values = {
       id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test"
       address_space = ["fd00::/48", "172.19.0.0/16"]
@@ -836,6 +836,172 @@ run "the_integration_is_off_by_default_without_a_subnet_to_join" {
   assert {
     condition     = !local.api_server_vnet_integration
     error_message = "A cluster with no api_server_subnet_name should not ask for VNet integration."
+  }
+}
+
+# ----------------------------------------------------------------------------------------------
+# Clusters that bring no network
+# ----------------------------------------------------------------------------------------------
+
+# What envs/prototype-automatic.tfvars asks for: no virtual network, no subnets, nothing to look up
+# and nothing to grant. AKS creates the network inside the node resource group instead.
+run "a_cluster_without_a_network_looks_nothing_up_and_grants_nothing" {
+  command = plan
+
+  variables {
+    sku_name                            = "Automatic"
+    sku_tier                            = "Standard"
+    virtual_network_name                = null
+    node_subnet_name                    = null
+    api_server_vnet_integration_enabled = false
+  }
+
+  assert {
+    condition     = !local.byo_network
+    error_message = "A cluster with no virtual_network_name should not be treated as attached to one."
+  }
+  assert {
+    condition = alltrue([
+      length(data.azurerm_virtual_network.this) == 0,
+      length(data.azurerm_subnet.node) == 0,
+      length(data.azurerm_subnet.system_node) == 0,
+      length(data.azurerm_subnet.api_server) == 0,
+    ])
+    error_message = "There is no existing network to read, so none of the lookups should run."
+  }
+  assert {
+    condition     = length(azurerm_role_assignment.network_contributor) == 0
+    error_message = "AKS owns the network it creates, so the cluster identity needs nothing granted on it."
+  }
+  assert {
+    condition     = length(time_sleep.role_assignment_propagation) == 0
+    error_message = "With no role assignments there is nothing to wait for."
+  }
+  assert {
+    condition     = local.default_agent_pool.vnet_subnet_id == null
+    error_message = "The node pool should be sent no subnet when the cluster brings no network."
+  }
+}
+
+# The two Automatic warnings are both about an existing virtual network, and the overlap check has
+# no address space to compare against. None of them should fire on this arrangement.
+run "a_cluster_without_a_network_raises_none_of_the_network_warnings" {
+  command = plan
+
+  variables {
+    sku_name                            = "Automatic"
+    sku_tier                            = "Standard"
+    virtual_network_name                = null
+    node_subnet_name                    = null
+    api_server_vnet_integration_enabled = false
+    private_cluster_enabled             = false
+    api_server_authorized_ip_ranges     = ["203.0.113.0/24"]
+  }
+
+  assert {
+    condition     = length(local.overlapping_cluster_cidrs) == 0
+    error_message = "There is no existing address space for the cluster ranges to collide with."
+  }
+}
+
+# AKS Automatic hosts its system components in the network it creates, so the subnet that is
+# otherwise required for this SKU is not.
+run "automatic_without_a_network_needs_no_system_node_subnet" {
+  command = plan
+
+  variables {
+    sku_name             = "Automatic"
+    sku_tier             = "Standard"
+    virtual_network_name = null
+    node_subnet_name     = null
+  }
+
+  assert {
+    condition     = length(data.azurerm_subnet.system_node) == 0
+    error_message = "A cluster with no network has no system node subnet to look up."
+  }
+}
+
+# A Base cluster can do without a network too; the module then gets no subnet for its node pool.
+run "base_without_a_network_sends_no_node_subnet" {
+  command = plan
+
+  variables {
+    virtual_network_name = null
+    node_subnet_name     = null
+  }
+
+  assert {
+    condition     = local.default_agent_pool.vnet_subnet_id == null
+    error_message = "A Base node pool should be sent no subnet when the cluster brings no network."
+  }
+}
+
+# The network and the node subnet are one decision, so half of it is refused rather than half done.
+run "rejects_a_virtual_network_without_a_node_subnet" {
+  command = plan
+
+  variables {
+    node_subnet_name = null
+  }
+
+  expect_failures = [var.node_subnet_name]
+}
+
+run "rejects_a_node_subnet_without_a_virtual_network" {
+  command = plan
+
+  variables {
+    virtual_network_name = null
+  }
+
+  expect_failures = [var.node_subnet_name]
+}
+
+run "rejects_a_system_node_subnet_without_a_virtual_network" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    virtual_network_name    = null
+    node_subnet_name        = null
+    system_node_subnet_name = "snet-aks-system"
+  }
+
+  expect_failures = [var.system_node_subnet_name]
+}
+
+run "rejects_an_api_server_subnet_without_a_virtual_network" {
+  command = plan
+
+  variables {
+    virtual_network_name   = null
+    node_subnet_name       = null
+    api_server_subnet_name = "snet-aks-apiserver"
+  }
+
+  expect_failures = [var.api_server_subnet_name]
+}
+
+# A bring-your-own private DNS zone is still reachable without a network of your own - it is the
+# private cluster that needs it, not the subnets - so the grant on the zone survives.
+run "a_cluster_without_a_network_still_grants_the_private_dns_zone" {
+  command = plan
+
+  variables {
+    virtual_network_name  = null
+    node_subnet_name      = null
+    private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.private_dns_zone_contributor) == 1
+    error_message = "The zone lives outside the network, so the cluster identity should still be granted it."
+  }
+  assert {
+    condition     = length(time_sleep.role_assignment_propagation) == 1
+    error_message = "There is an assignment to wait for, even with no network assignments."
   }
 }
 

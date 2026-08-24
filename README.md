@@ -6,7 +6,10 @@ There is a single root module at the repository root. Everything an environment 
 a variables file under `envs/` - no per-environment Terraform code.
 
 Clusters are attached to infrastructure that already exists - a resource group, a virtual network
-and a private DNS zone - and are **private by default**.
+and a private DNS zone - and are **private by default**. The network is the one piece that can be
+left out: name none, and AKS creates and manages one for the cluster instead, which is what
+`envs/prototype-automatic.tfvars` does. See
+[Clusters without a network of their own](#clusters-without-a-network-of-their-own).
 
 [avm]: https://azure.github.io/Azure-Verified-Modules/
 
@@ -16,7 +19,7 @@ and a private DNS zone - and are **private by default**.
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, and wires up private or public API server access. |
 | `envs/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
-| `envs/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades. Runs on the Standard tier, which Automatic requires, with API Server VNet Integration turned off. |
+| `envs/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades - the virtual network included, since this cluster brings none of its own. Runs on the Standard tier, which Automatic requires, and with a public API server. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
 | `backend.hcl.example` | Template for the shared remote state backend. |
 | `docs/troubleshooting.md` | What to do when an apply fails or times out, and how to get a cluster stuck in `Creating` back under Terraform's control. |
@@ -28,19 +31,22 @@ and a private DNS zone - and are **private by default**.
 
 These must exist before running Terraform:
 
-- A **resource group** for the cluster.
-- A **virtual network** in the same region, with:
+- A **resource group** for the cluster. This one is always needed.
+- A **virtual network** in the same region, unless the cluster brings none and lets AKS create one -
+  see [Clusters without a network of their own](#clusters-without-a-network-of-their-own). Where
+  there is one, it needs:
   - a subnet for the cluster nodes;
   - for AKS Automatic, a subnet for the hosted system components, which must be a different subnet
     from the node one;
   - a subnet delegated to `Microsoft.ContainerService/managedClusters` and at least a `/28`, only
-    while API Server VNet Integration is in use. `envs/prototype-automatic.tfvars` turns the
-    integration off, so it needs no such subnet - see
-    [API Server VNet Integration](#api-server-vnet-integration).
+    while [API Server VNet Integration](#api-server-vnet-integration) is in use.
 
   See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
+
+`envs/prototype-automatic.tfvars` needs none of the network pieces: it names a resource group and
+nothing else about the existing estate. `envs/prototype-free.tfvars` needs all of them.
 
 The identity running Terraform needs `Contributor` on the resource group and, unless
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
@@ -110,8 +116,9 @@ Two things have to be granted before that returns anything:
   `... RBAC Reader` on the cluster or on a namespace inside it.
 
 Because the cluster is private, the kubeconfig only resolves from inside the virtual network or from
-a network that reaches it. Without that path, `az aks command invoke` runs a command in the cluster
-through the Azure control plane instead:
+a network that reaches it - and for a cluster that brings no network of its own, there is no such
+path at all. Without one, `az aks command invoke` runs a command in the cluster through the Azure
+control plane instead:
 
 ```sh
 az aks command invoke --resource-group <resource_group_name> \
@@ -221,6 +228,12 @@ restrictive disruption budget can otherwise hold the upgrade indefinitely - and
 not simply a different value for the same cluster: Azure ignores most of the request and fills in
 its own answers, so the two SKUs behave differently even though they share one set of variables.
 
+`envs/prototype-automatic.tfvars` runs this SKU **without an existing network**, so most of what
+follows does not apply to it - it is what an Automatic cluster needs when you do attach it to one,
+which `prototype-free` does and which this environment may go back to. Skip to
+[Clusters without a network of their own](#clusters-without-a-network-of-their-own) for the
+arrangement it is actually on.
+
 Beyond the [prerequisites](#prerequisites), an Automatic cluster in an existing network needs:
 
 - **Two separate subnets** - one for the nodes and one for the hosted system components - and a
@@ -233,15 +246,7 @@ Beyond the [prerequisites](#prerequisites), an Automatic cluster in an existing 
     subnets`, so Terraform refuses it at plan time.
   - `api_server_subnet_name` is used by AKS alone, and only when the API server is joined to the
     network. **Microsoft documents it as required for an Automatic cluster in an existing virtual
-    network**, and `envs/prototype-automatic.tfvars` nonetheless turns the integration off, because
-    that is what the create has been failing on. The section on it has the details and the way back.
-
-  A cluster that brings no network at all is a different arrangement again: AKS creates its own
-  virtual network inside the `MC_` resource group and the bring-your-own subnet fields stay null,
-  which is why the portal can create an Automatic cluster without asking for any of this. That
-  cluster cannot be reached across a network boundary - see the node resource group lockdown note
-  below - and this configuration does not offer it, since every environment here attaches to a
-  network that already exists.
+    network** - see [API Server VNet Integration](#api-server-vnet-integration).
 - **`Network Contributor` on the whole virtual network**, not on the individual subnets. Node
   autoprovisioning creates node pools that the subnet assignments do not cover, which is why
   `network_role_assignment_scope` defaults to `virtual_network` for this SKU and Terraform warns
@@ -308,11 +313,53 @@ If a deployment of an Automatic cluster times out, see [Troubleshooting](docs/tr
 
 [egress]: https://learn.microsoft.com/azure/aks/outbound-rules-control-egress
 
+## Clusters without a network of their own
+
+Leave `virtual_network_name` and `node_subnet_name` unset and the cluster brings no network at all:
+AKS creates and manages a virtual network for it inside the node resource group, sizes the subnets,
+and joins the nodes - and, on Automatic, the hosted system components - to it without being told
+how. It is what the portal does when it creates an Automatic cluster without asking for any of this.
+
+The two go together. Naming one without the other is refused rather than half-applied, and so is
+naming `system_node_subnet_name` or `api_server_subnet_name` for a cluster that has no network to
+put them in. With no network there is also nothing to grant: no `Network Contributor` assignment is
+created whatever `network_role_assignment_scope` says, and the propagation wait is skipped along
+with it.
+
+**`envs/prototype-automatic.tfvars` is on this arrangement.** Attaching an Automatic cluster to the
+existing network is what has been failing here - the bring-your-own subnets and the API server
+injected into a delegated one - while `prototype-free` builds in that same network without trouble,
+so the network is taken out of the picture rather than tuned around. The support for the other
+arrangement is entirely intact: name the network and its subnets again to go back to it, and the
+variables file lists the lines to put back.
+
+What it costs:
+
+- **The cluster is reachable only from the network AKS made.** The node resource group is locked
+  down, so that network cannot be peered from outside and no virtual network link can be added to
+  it. A private cluster on this arrangement is reachable through `az aks command invoke` and little
+  else, which is why `prototype-automatic` runs a **public** API server and should carry a real
+  `api_server_authorized_ip_ranges` allowlist rather than `0.0.0.0/0`.
+- **A bring-your-own private DNS zone is of limited use**, for the same reason: the zone can be
+  created and the cluster identity granted on it, but nothing outside can resolve through it without
+  a link to the AKS-managed network.
+- **Azure picks the address ranges**, as it does for any Automatic cluster on `loadBalancer` egress
+  - see [Address ranges on Automatic](#address-ranges-on-automatic). There is no existing address
+  space for them to collide with, so Terraform's overlap check has nothing to compare and stays
+  quiet; a network peered to the cluster later is a different matter and is not checked here.
+- **Nothing routes to your estate.** Anything the workloads need to reach on the existing network -
+  a database, a private endpoint, a firewall for egress - is not reachable from here. A cluster that
+  needs any of that belongs on an existing network.
+
+It is a prototype arrangement, in other words: it takes the network out of the equation while the
+SKU itself is what is being proven, and it is not where a cluster with real dependencies belongs.
+
 ## API Server VNet Integration
 
 API Server VNet Integration injects the API server into a subnet of the existing virtual network, so
 that the nodes reach it across the network rather than through the tunnel AKS otherwise sets up. It
-is off unless an environment asks for it, and asking for it means naming the subnet:
+needs a network to inject into, so it is available only to a cluster that brings one. It is off
+unless an environment asks for it, and asking for it means naming the subnet:
 
 ```hcl
 api_server_subnet_name = "snet-aks-api"
@@ -335,17 +382,19 @@ The API server is then reached over its public endpoint, or over the AKS-managed
 for a private cluster, and no delegated subnet is needed. Naming `api_server_subnet_name` while the
 flag is `false` is **refused** rather than ignored, so an environment cannot half-say both.
 
-**`envs/prototype-automatic.tfvars` ships with the integration off**, because creating that cluster
-with the API server injected into a delegated subnet is what has been failing - `prototype-free`
-builds in the same virtual network and the same node subnet without trouble. The support is entirely
-intact: drop the flag and name the delegated subnet again to turn it back on.
+**`envs/prototype-automatic.tfvars` ships with the integration off** and states it with that flag,
+even though the cluster brings no network for it to use either way - so that naming a subnet is
+refused rather than quietly ignored if the network is ever named again. Injecting the API server
+into a delegated subnet is part of what has been failing there; `prototype-free` builds in the
+existing network without any of it.
 
 Microsoft documents the delegated subnet as **required** for an AKS Automatic cluster in an existing
-virtual network, so Terraform warns on every plan for an Automatic cluster that has no
-`api_server_subnet_name` - unless `api_server_vnet_integration_enabled = false` states that the
-absence is deliberate, which is the one case where the warning would be noise rather than news.
-Azure has the final say on whether it will build such a cluster; `docs/troubleshooting.md` covers
-what to look at when it does not.
+virtual network, so Terraform warns on every plan for an Automatic cluster that is attached to one
+and has no `api_server_subnet_name` - unless `api_server_vnet_integration_enabled = false` states
+that the absence is deliberate, which is the one case where the warning would be noise rather than
+news. A cluster that brings no network is not warned about at all: the requirement is about an
+existing virtual network, and there is none. Azure has the final say on whether it will build such a
+cluster; `docs/troubleshooting.md` covers what to look at when it does not.
 
 ## Public clusters
 

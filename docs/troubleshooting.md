@@ -189,6 +189,30 @@ terraform state list | grep module.aks
 If the import is more trouble than the cluster is worth, deleting it and applying again is a
 perfectly reasonable answer for a prototype. It is not for anything with state in it.
 
+## `AKSAutomaticSKUFeatureValidationError` on the create request
+
+```
+400 BadRequest
+Managed cluster 'Automatic' SKU should use SAMI when using managed vnet.
+```
+
+Azure refusing the request outright, in seconds rather than after a long create: an Automatic cluster
+on the network AKS manages has to run on a **system assigned** identity, and the request named a user
+assigned one. Nothing was created, so there is nothing to clean up.
+
+This configuration works that out for itself - a cluster with no `virtual_network_name` on the
+Automatic SKU is sent `SystemAssigned` and no identity is created for it - so seeing this means the
+apply predates that, or the module is being sent a `managed_identities` block from somewhere else.
+Check what the plan intends to send:
+
+```sh
+terraform plan -var-file=envs/prototype-automatic.tfvars | grep -A3 identity
+```
+
+Note that the cluster's principal only exists once the cluster does. Anything it has to reach - a
+container registry, a key vault - is granted afterwards, from `terraform output -raw
+identity_principal_id`, rather than before.
+
 ## Common causes
 
 Everything here except `Microsoft.PolicyInsights` is about a cluster attached to an existing
@@ -212,6 +236,9 @@ Confirm the assignment is actually there and is in effect:
 IDENTITY_ID=$(terraform output -raw identity_principal_id)
 az role assignment list --assignee "$IDENTITY_ID" --all -o table
 ```
+
+The output carries whichever identity the cluster actually runs as - the one created here, or the
+cluster's own where Azure requires that - so it is empty until the cluster exists in the latter case.
 
 Azure RBAC is eventually consistent, so an assignment created seconds before the cluster can still
 be invisible to it. That is what `role_assignment_propagation_delay` is for; raise it if an apply

@@ -89,7 +89,7 @@ run "the_identity_name_is_built_from_the_cluster_name_and_the_region" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.this.name == "id-sec-prototype-aks-free"
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-sec-prototype-aks-free"
     error_message = "aks-prototype-free in swedencentral should be run by id-sec-prototype-aks-free."
   }
 }
@@ -102,7 +102,7 @@ run "an_automatic_cluster_is_named_apart_from_its_sibling" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.this.name == "id-sec-prototype-aks-automatic"
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-sec-prototype-aks-automatic"
     error_message = "Two clusters in one environment must not end up sharing an identity name."
   }
 }
@@ -115,7 +115,7 @@ run "a_cluster_name_with_nothing_after_the_environment_keeps_the_short_form" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.this.name == "id-sec-prod-aks"
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-sec-prod-aks"
     error_message = "A name with no distinguishing tail should stop after the function."
   }
 }
@@ -128,7 +128,7 @@ run "a_cluster_name_with_nothing_to_split_has_no_environment_to_lift" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.this.name == "id-sec-cluster"
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-sec-cluster"
     error_message = "A single segment name has no environment, so the name follows the region directly."
   }
 }
@@ -142,7 +142,7 @@ run "the_region_follows_the_location" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.this.name == "id-weu-prod-aks-main"
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-weu-prod-aks-main"
     error_message = "The region code should come from location, not from swedencentral by habit."
   }
 }
@@ -982,6 +982,91 @@ run "rejects_an_api_server_subnet_without_a_virtual_network" {
   }
 
   expect_failures = [var.api_server_subnet_name]
+}
+
+# Azure answers an Automatic cluster on the network it manages with `Managed cluster 'Automatic' SKU
+# should use SAMI when using managed vnet`, so that combination runs on the cluster's own identity
+# and none is created here. There is nothing to pre-grant either way.
+run "automatic_without_a_network_runs_on_a_system_assigned_identity" {
+  command = plan
+
+  variables {
+    sku_name             = "Automatic"
+    sku_tier             = "Standard"
+    virtual_network_name = null
+    node_subnet_name     = null
+  }
+
+  assert {
+    condition     = local.system_assigned_identity
+    error_message = "Azure refuses an Automatic cluster on a managed virtual network with a user assigned identity."
+  }
+  assert {
+    condition     = length(azurerm_user_assigned_identity.this) == 0
+    error_message = "No user assigned identity should be created for a cluster that runs on its own."
+  }
+}
+
+# The rule is Automatic's alone, and only on the network AKS manages.
+run "automatic_on_an_existing_network_keeps_the_user_assigned_identity" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    system_node_subnet_name = "snet-aks-system"
+    api_server_subnet_name  = "snet-aks-apiserver"
+  }
+
+  assert {
+    condition     = !local.system_assigned_identity
+    error_message = "An Automatic cluster on an existing network is granted access before it is created, so it needs an identity that already exists."
+  }
+  assert {
+    condition     = length(azurerm_user_assigned_identity.this) == 1
+    error_message = "The identity should still be created for a cluster on an existing network."
+  }
+}
+
+run "base_without_a_network_keeps_the_user_assigned_identity" {
+  command = plan
+
+  variables {
+    virtual_network_name = null
+    node_subnet_name     = null
+  }
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.this) == 1
+    error_message = "Only the Automatic SKU is refused a user assigned identity on a managed network."
+  }
+}
+
+# The zone has to be granted to a principal that exists before the cluster, and a system assigned
+# identity does not. Terraform warns rather than refusing - Azure creates the cluster either way,
+# and it is the DNS registration that suffers.
+run "warns_about_a_byo_private_dns_zone_with_no_identity_to_grant_it" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    virtual_network_name    = null
+    node_subnet_name        = null
+    private_cluster_enabled = true
+    private_dns_zone_name   = "privatelink.swedencentral.azmk8s.io"
+  }
+
+  expect_failures = [check.byo_private_dns_zone_has_an_identity_to_grant]
+
+  assert {
+    condition     = length(azurerm_role_assignment.private_dns_zone_contributor) == 0
+    error_message = "There is no principal to grant the zone to before the cluster exists."
+  }
+  assert {
+    condition     = length(time_sleep.role_assignment_propagation) == 0
+    error_message = "With no assignments created there is nothing to wait for."
+  }
 }
 
 # A bring-your-own private DNS zone is still reachable without a network of your own - it is the

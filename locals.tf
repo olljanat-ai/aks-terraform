@@ -8,6 +8,12 @@ locals {
   # manages a virtual network for it inside the node resource group: no subnet is looked up, there
   # is nothing to grant the cluster identity, and every bring-your-own network field stays null.
   byo_network = var.virtual_network_name != null
+  # Azure refuses an Automatic cluster on the network AKS manages unless the cluster runs on a
+  # system assigned identity: `Managed cluster 'Automatic' SKU should use SAMI when using managed
+  # vnet`. That works out, because the user assigned identity below exists precisely to be granted
+  # access to resources that already exist - and a cluster that brings no network has none of those
+  # to be granted. The identity is not created at all in that case; the cluster's own is used.
+  system_assigned_identity = local.is_automatic && !local.byo_network
   # Whether the API server is joined to the existing network. It takes both halves: the integration
   # turned on and a subnet to inject the API server into. Either one missing leaves the API server
   # where AKS puts it by default, and nothing about the subnet reaches Azure.
@@ -163,6 +169,9 @@ locals {
       false
     )
   ]
+  # The grant on a bring-your-own private DNS zone needs a principal that exists before the cluster,
+  # which a system assigned identity is not.
+  create_private_dns_zone_assignment   = var.create_role_assignments && local.use_byo_private_dns_zone && !local.system_assigned_identity
   private_dns_zone                     = var.private_cluster_enabled ? (local.use_byo_private_dns_zone ? one(data.azurerm_private_dns_zone.this[*].id) : "system") : null
   private_dns_zone_resource_group_name = coalesce(var.private_dns_zone_resource_group_name, var.resource_group_name)
   use_byo_private_dns_zone             = var.private_cluster_enabled && var.private_dns_zone_name != null

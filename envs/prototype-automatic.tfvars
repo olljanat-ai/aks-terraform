@@ -21,8 +21,26 @@ resource_group_name = "rg-aks-prototype"
 virtual_network_name    = "vnet-aks-prototype"
 node_subnet_name        = "snet-aks-nodes"
 system_node_subnet_name = "snet-aks-system"
-api_server_subnet_name  = "snet-aks-api"
 # virtual_network_resource_group_name = "rg-network"
+
+# API Server VNet Integration is OFF here, deliberately. Creating this cluster with the API server
+# injected into a delegated subnet has been the trouble: prototype-free builds in the same virtual
+# network and the same node subnet without any of it, so the integration is taken out of the
+# picture rather than tuned around. The API server is reached over its own endpoint instead, as the
+# Base cluster's is, and no delegated subnet is needed.
+#
+# Microsoft documents the delegated subnet as required for an Automatic cluster in an existing
+# network, so Azure may yet refuse this or leave it in Creating for reasons of its own. That is the
+# thing being tested here; docs/troubleshooting.md says how to tell the two failures apart.
+#
+# The configuration still supports the integration in full. To put it back, drop the flag below and
+# name the delegated subnet again:
+#
+#   api_server_vnet_integration_enabled = true   # or leave it out, it is the default
+#   api_server_subnet_name              = "snet-aks-api"
+#
+# Naming the subnet while the flag is false is refused rather than ignored, so the two cannot drift.
+api_server_vnet_integration_enabled = false
 
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"

@@ -26,32 +26,16 @@ locals {
   cost_analysis_enabled = var.sku_tier != "Free"
   # What of `default_node_pool` reaches Azure. A Base cluster gets all of it.
   #
-  # An AKS Automatic cluster gets none of it. AKS runs that cluster's system components on a system
-  # node pool it provisions, scales and patches itself, and creates every workload node pool through
-  # node autoprovisioning, so a default agent pool sent from here would only be a second, redundant
-  # `systempool`. The module drops the whole block for that SKU rather than filtering it - see the
-  # comment on its source in main.tf - so the Automatic branch below is every attribute nulled out.
-  # It cannot be collapsed to `{}`: the two branches of a conditional have to unify to one type, and
-  # an empty object has nothing to unify the Base branch's mix of strings, numbers, booleans and
-  # objects against.
+  # An AKS Automatic cluster gets no default agent pool at all - the module takes `null` for that,
+  # and sends neither the `agentPoolProfiles` entry of the create request nor the write to the agent
+  # pool child resource. AKS runs that cluster's system components on a system node pool it
+  # provisions, scales and patches itself, and creates every workload node pool through node
+  # autoprovisioning, so anything sent from here would only be a second, redundant `systempool`.
   #
   # The node subnet goes with the rest, including for a cluster on an existing network - that names
   # its subnets through `hosted_system_profile` below instead, which is why `system_node_subnet_name`
   # is required for the combination.
-  default_agent_pool = local.is_automatic ? {
-    availability_zones  = null
-    count_of            = null
-    enable_auto_scaling = null
-    max_count           = null
-    max_pods            = null
-    min_count           = null
-    name                = var.default_node_pool.name
-    os_disk_size_gb     = null
-    type                = null
-    upgrade_settings    = null
-    vm_size             = null
-    vnet_subnet_id      = null
-    } : {
+  default_agent_pool = local.is_automatic ? null : {
     availability_zones  = var.default_node_pool.availability_zones
     count_of            = var.default_node_pool.node_count
     enable_auto_scaling = var.default_node_pool.enable_auto_scaling

@@ -138,18 +138,18 @@ resource "time_sleep" "role_assignment_propagation" {
   }
 }
 
-# The AVM module, from a fork rather than the registry. Registry 0.8.1 sends a default agent pool
-# for every SKU, including Automatic - once as `agentPoolProfiles` in the create request, and again
-# as a write straight to the agent pool child resource, because the cluster resource ignores changes
-# to that array. On an Automatic cluster that is a `systempool` nobody asked for, standing next to
-# the system pool AKS runs by itself, and the child write is a plain create-or-update, so deleting
-# the pool by hand only makes the next apply put it back. The fork skips the default agent pool for
-# that SKU; see `default_agent_pool` in locals.tf.
+# The AVM module, from a fork rather than the registry. Registry 0.8.1 has no way to say "no default
+# agent pool": it sends one for every SKU, once as `agentPoolProfiles` in the create request and
+# again as a write straight to the agent pool child resource, because the cluster resource ignores
+# changes to that array. On an Automatic cluster that is a `systempool` nobody asked for, standing
+# next to the system pool AKS runs by itself, and the child write is a plain create-or-update, so
+# deleting the pool by hand only makes the next apply put it back. The fork lets
+# `default_agent_pool` be null, which is what local.default_agent_pool passes for that SKU.
 #
 # Pinned to a commit rather than a branch, so that the source cannot move underneath an apply.
 # Switch this back to the registry once the change is released upstream.
 module "aks" {
-  source = "git::https://github.com/olljanat-ai/terraform-azurerm-avm-res-containerservice-managedcluster.git?ref=5df32d9d6b087ec2f7bda7b451230cad99488d1b"
+  source = "git::https://github.com/olljanat-ai/terraform-azurerm-avm-res-containerservice-managedcluster.git?ref=2bd835eafb143cfdfbd4e3694d51211a0e88c757"
 
   location  = var.location
   name      = var.name

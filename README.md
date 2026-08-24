@@ -335,9 +335,11 @@ apply put it back:
 ```
 
 There is no way to switch that off from here: the write is unconditional in the module, and a root
-module cannot remove a resource another module declares. So the fork skips the default agent pool
-for the Automatic SKU entirely - no `agentPoolProfiles` in the create body, no child write - and
-leaves every other SKU exactly as it was. Microsoft documents that an Automatic cluster
+module cannot remove a resource another module declares. So the fork lets `default_agent_pool` be
+`null`, meaning "manage no default agent pool" - no `agentPoolProfiles` in the create body, no child
+write - and `local.default_agent_pool` passes that for the Automatic SKU. Nothing else changes: the
+variable still defaults to `{}`, so a configuration that says nothing about the default agent pool
+still gets one, on every SKU. Microsoft documents that an Automatic cluster
 [cannot be created without a managed system node pool][managed-system-pools], and the Azure CLI
 strips the agent pool configuration out of its own create request for that SKU.
 
@@ -354,8 +356,8 @@ az aks show -g rg-aks-prototype -n aks-prototype-automatic --query hostedSystemP
 
 `"enabled": true` means the system components run on AKS's own infrastructure and the pool can go.
 Anything else means the cluster predates managed system node pools and still needs a system pool of
-its own; set `default_agent_pool_enabled = true` on the module to keep managing it. The property is
-fixed at creation - Azure will not turn it on for a cluster that already exists.
+its own; keep managing it by leaving `local.default_agent_pool` non-null for that environment. The
+property is fixed at creation - Azure will not turn it on for a cluster that already exists.
 
 Drop the fork and go back to the registry once the change is released upstream.
 

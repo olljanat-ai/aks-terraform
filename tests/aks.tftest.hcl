@@ -291,9 +291,9 @@ run "one_subnet_in_two_roles_is_granted_once" {
 }
 
 # AKS Automatic runs its system components on a system node pool AKS provisions itself and creates
-# every workload node pool through node autoprovisioning, so the module sends it no default agent
-# pool at all. Everything written for a Base cluster is nulled out before it gets there, so that a
-# `default_node_pool` left over from the other SKU cannot look like it is still doing something.
+# every workload node pool through node autoprovisioning, so the module is sent no default agent
+# pool at all for that SKU - a null rather than an emptied-out one, which is what stops it writing
+# a `systempool` to the cluster.
 run "automatic_sends_no_base_cluster_node_pool_settings" {
   command = plan
 
@@ -310,19 +310,8 @@ run "automatic_sends_no_base_cluster_node_pool_settings" {
   }
 
   assert {
-    condition = alltrue([
-      local.default_agent_pool.vm_size == null,
-      local.default_agent_pool.count_of == null,
-      local.default_agent_pool.enable_auto_scaling == null,
-      local.default_agent_pool.type == null,
-      local.default_agent_pool.upgrade_settings == null,
-      local.default_agent_pool.availability_zones == null,
-    ])
-    error_message = "AKS Automatic should be sent no VM size, count, autoscaler, pool type or upgrade settings."
-  }
-  assert {
-    condition     = local.default_agent_pool.vnet_subnet_id == null
-    error_message = "AKS Automatic names its node subnet through hosted_system_profile, not through the default agent pool."
+    condition     = local.default_agent_pool == null
+    error_message = "AKS Automatic should be sent no default agent pool at all, so that the module writes no systempool."
   }
   assert {
     condition     = local.hosted_system_profile.node_subnet_id == data.azurerm_subnet.node[0].id
@@ -883,8 +872,8 @@ run "a_cluster_without_a_network_looks_nothing_up_and_grants_nothing" {
     error_message = "With no role assignments there is nothing to wait for."
   }
   assert {
-    condition     = local.default_agent_pool.vnet_subnet_id == null
-    error_message = "The node pool should be sent no subnet when the cluster brings no network."
+    condition     = local.default_agent_pool == null
+    error_message = "An Automatic cluster should be sent no default agent pool, network or no network."
   }
 }
 

@@ -138,9 +138,18 @@ resource "time_sleep" "role_assignment_propagation" {
   }
 }
 
+# The AVM module, from a fork rather than the registry. Registry 0.8.1 sends a default agent pool
+# for every SKU, including Automatic - once as `agentPoolProfiles` in the create request, and again
+# as a write straight to the agent pool child resource, because the cluster resource ignores changes
+# to that array. On an Automatic cluster that is a `systempool` nobody asked for, standing next to
+# the system pool AKS runs by itself, and the child write is a plain create-or-update, so deleting
+# the pool by hand only makes the next apply put it back. The fork skips the default agent pool for
+# that SKU; see `default_agent_pool` in locals.tf.
+#
+# Pinned to a commit rather than a branch, so that the source cannot move underneath an apply.
+# Switch this back to the registry once the change is released upstream.
 module "aks" {
-  source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
-  version = "0.8.1"
+  source = "git::https://github.com/olljanat-ai/terraform-azurerm-avm-res-containerservice-managedcluster.git?ref=5df32d9d6b087ec2f7bda7b451230cad99488d1b"
 
   location  = var.location
   name      = var.name
@@ -185,13 +194,9 @@ module "aks" {
   dns_prefix         = var.name
   enable_telemetry   = var.enable_telemetry
   fqdn_subdomain     = local.fqdn_subdomain
-  # AKS Automatic places its hosted system components in a subnet of the existing network. A cluster
-  # that brings no network sends no profile at all, and AKS hosts them in the network it creates.
-  hosted_system_profile = local.is_automatic && var.system_node_subnet_name != null ? {
-    enabled               = true
-    node_subnet_id        = one(data.azurerm_subnet.node[*].id)
-    system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
-  } : null
+  # AKS Automatic places its hosted system components in a subnet of the existing network, and its
+  # workload nodes in another - see local.hosted_system_profile.
+  hosted_system_profile = local.hosted_system_profile
   # Ingress is handled by a third party controller installed into the cluster, so every managed
   # ingress AKS offers is turned off: App Routing with its NGINX controller, the Istio based Gateway
   # API implementation App Routing can front it with, and the managed Gateway API installation. All

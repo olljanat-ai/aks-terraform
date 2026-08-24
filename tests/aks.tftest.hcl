@@ -290,9 +290,10 @@ run "one_subnet_in_two_roles_is_granted_once" {
   }
 }
 
-# AKS Automatic sizes and rolls its own node pools. Everything written for a Base cluster has to be
-# dropped before it reaches the module, because the request the module sends to the agent pool after
-# the cluster is created is not filtered by SKU the way the create request is.
+# AKS Automatic runs its system components on a system node pool AKS provisions itself and creates
+# every workload node pool through node autoprovisioning, so the module sends it no default agent
+# pool at all. Everything written for a Base cluster is nulled out before it gets there, so that a
+# `default_node_pool` left over from the other SKU cannot look like it is still doing something.
 run "automatic_sends_no_base_cluster_node_pool_settings" {
   command = plan
 
@@ -320,8 +321,12 @@ run "automatic_sends_no_base_cluster_node_pool_settings" {
     error_message = "AKS Automatic should be sent no VM size, count, autoscaler, pool type or upgrade settings."
   }
   assert {
-    condition     = local.default_agent_pool.vnet_subnet_id == data.azurerm_subnet.node[0].id
-    error_message = "AKS Automatic still places its nodes in the node subnet."
+    condition     = local.default_agent_pool.vnet_subnet_id == null
+    error_message = "AKS Automatic names its node subnet through hosted_system_profile, not through the default agent pool."
+  }
+  assert {
+    condition     = local.hosted_system_profile.node_subnet_id == data.azurerm_subnet.node[0].id
+    error_message = "AKS Automatic on an existing network still places its nodes in the node subnet."
   }
 }
 

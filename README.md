@@ -17,7 +17,7 @@ left out: name none, and AKS creates and manages one for the cluster instead, wh
 
 | Path | Purpose |
 | --- | --- |
-| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, and wires up private or public API server access. |
+| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`avm-res-containerservice-managedcluster`][module] - a fork of the AVM module, pinned to a commit, see [Why the module comes from a fork](#why-the-module-comes-from-a-fork): looks up the existing resources by name, creates the cluster identity and its role assignments, and wires up private or public API server access. |
 | `envs/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
 | `envs/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades - the virtual network included, since this cluster brings none of its own. Runs on the Standard tier, which Automatic requires, and with a public API server. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -25,7 +25,8 @@ left out: name none, and AKS creates and manages one for the cluster instead, wh
 | `docs/troubleshooting.md` | What to do when an apply fails or times out, and how to get a cluster stuck in `Creating` back under Terraform's control. |
 | `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, and the Dependabot schedule that watches the pinned module and provider versions. |
 
-[module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
+[module]: https://github.com/olljanat-ai/terraform-azurerm-avm-res-containerservice-managedcluster
+[upstream-module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
 
 ## Prerequisites
 
@@ -264,7 +265,7 @@ What this configuration drops for the Automatic SKU, because Azure refuses or ig
 
 | Setting | What happens |
 | --- | --- |
-| `default_node_pool` | Dropped in full apart from the pool name. Azure sizes, scales and rolls the pools itself, and the node count falls back to the three nodes the module defaults to. |
+| `default_node_pool` | Dropped in full, pool name included. AKS runs the system components on a system node pool it provisions, scales and patches itself, and creates every workload node pool through node autoprovisioning. See [Why the module comes from a fork](#why-the-module-comes-from-a-fork). |
 | `network_profile` | Dropped by the module **in full, including `pod_cidr` and `service_cidr`**, while `outbound_type` is `loadBalancer`. Azure then uses its own ranges - `10.244.0.0/16` for pods, `10.0.0.0/16` for services - and they cannot be changed once the cluster exists. See [Address ranges on Automatic](#address-ranges-on-automatic). |
 | `azure_policy_enabled` | Ignored. Automatic always runs the Azure Policy add-on. |
 | `disable_local_accounts` | **Not sent.** The module's Automatic request has no place for it, so unlike a `Base` cluster an Automatic cluster is created with local accounts enabled. Turn them off afterwards with `az aks update --disable-local-accounts`. |
@@ -312,6 +313,53 @@ Two more things worth knowing:
 If a deployment of an Automatic cluster times out, see [Troubleshooting](docs/troubleshooting.md).
 
 [egress]: https://learn.microsoft.com/azure/aks/outbound-rules-control-egress
+
+### Why the module comes from a fork
+
+`module "aks"` in `main.tf` points at a [fork of the AVM module][module], pinned to a commit, rather
+than at [`Azure/avm-res-containerservice-managedcluster/azurerm` 0.8.1][upstream-module]. One change
+separates them.
+
+Upstream sends a default agent pool for every SKU. It reaches Azure twice: as `agentPoolProfiles` in
+the create request, and again as a write straight to the agent pool child resource, which exists
+because the cluster resource ignores changes to that array. On an Automatic cluster the result is a
+`systempool` node pool nobody asked for, standing next to the system pool AKS runs by itself - and
+because the child write is a plain create-or-update, deleting that pool by hand only makes the next
+apply put it back:
+
+```
+  # module.aks.azapi_update_resource.default_agent_pool will be created
+  + resource "azapi_update_resource" "default_agent_pool" {
+      + body = { properties = { count = 3, mode = "System", osType = "Linux" } }
+      + name = "systempool"
+```
+
+There is no way to switch that off from here: the write is unconditional in the module, and a root
+module cannot remove a resource another module declares. So the fork skips the default agent pool
+for the Automatic SKU entirely - no `agentPoolProfiles` in the create body, no child write - and
+leaves every other SKU exactly as it was. Microsoft documents that an Automatic cluster
+[cannot be created without a managed system node pool][managed-system-pools], and the Azure CLI
+strips the agent pool configuration out of its own create request for that SKU.
+
+The node subnet is not lost with the pool. A cluster on an existing network names its subnets
+through `hosted_system_profile`, which is why `system_node_subnet_name` is required for that
+combination.
+
+**Before the first apply on a cluster that already exists**, check that AKS is hosting the system
+pool for it, since that is what makes the `systempool` redundant rather than load-bearing:
+
+```bash
+az aks show -g rg-aks-prototype -n aks-prototype-automatic --query hostedSystemProfile
+```
+
+`"enabled": true` means the system components run on AKS's own infrastructure and the pool can go.
+Anything else means the cluster predates managed system node pools and still needs a system pool of
+its own; set `default_agent_pool_enabled = true` on the module to keep managing it. The property is
+fixed at creation - Azure will not turn it on for a cluster that already exists.
+
+Drop the fork and go back to the registry once the change is released upstream.
+
+[managed-system-pools]: https://learn.microsoft.com/azure/aks/automatic/aks-automatic-managed-system-node-pools-about
 
 ## Clusters without a network of their own
 
@@ -488,6 +536,6 @@ choice for a throwaway cluster and a poor one for anything else.
   difference shows up as an update in every later plan. Terraform can leave the property alone only
   by not mentioning it.
 - AKS Automatic ignores most cluster settings on purpose, which is why both SKUs share one set of
-  variables: the AVM module drops everything Automatic does not accept from `default_node_pool` and
-  `network_profile`. Switching an environment between the two SKUs is a `sku_name` change plus the
-  two extra subnets Automatic needs.
+  variables: the module drops `default_node_pool` entirely and everything Automatic does not accept
+  from `network_profile`. Switching an environment between the two SKUs is a `sku_name` change plus
+  the two extra subnets Automatic needs.

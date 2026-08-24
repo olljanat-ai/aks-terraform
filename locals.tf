@@ -24,16 +24,20 @@ locals {
   # Cost analysis breaks the cluster spend down by namespace and deployment in Azure Cost
   # Management. Azure sells it with the paid tiers only and refuses the request on Free.
   cost_analysis_enabled = var.sku_tier != "Free"
-  # What of `default_node_pool` reaches Azure. A Base cluster gets all of it. An AKS Automatic
-  # cluster sizes, scales and rolls its own node pools, so it gets only the name and the node
-  # subnet - what the module's own Automatic example sends - and the count falls back to the three
-  # nodes the module defaults to, rather than a number written for a Base cluster.
+  # What of `default_node_pool` reaches Azure. A Base cluster gets all of it.
   #
-  # Leaving the rest set and relying on the module to drop it does not work. The module filters the
-  # create request down to what Automatic accepts, but the follow-up request it sends straight to
-  # the agent pool afterwards - the one that exists because the cluster resource ignores changes to
-  # `agentPoolProfiles` - is not filtered at all, so a VM size, an autoscaler setting and a set of
-  # upgrade settings reach an Automatic cluster that has no place to put them.
+  # An AKS Automatic cluster gets none of it. AKS runs that cluster's system components on a system
+  # node pool it provisions, scales and patches itself, and creates every workload node pool through
+  # node autoprovisioning, so a default agent pool sent from here would only be a second, redundant
+  # `systempool`. The module drops the whole block for that SKU rather than filtering it - see the
+  # comment on its source in main.tf - so the Automatic branch below is every attribute nulled out.
+  # It cannot be collapsed to `{}`: the two branches of a conditional have to unify to one type, and
+  # an empty object has nothing to unify the Base branch's mix of strings, numbers, booleans and
+  # objects against.
+  #
+  # The node subnet goes with the rest, including for a cluster on an existing network - that names
+  # its subnets through `hosted_system_profile` below instead, which is why `system_node_subnet_name`
+  # is required for the combination.
   default_agent_pool = local.is_automatic ? {
     availability_zones  = null
     count_of            = null
@@ -46,7 +50,7 @@ locals {
     type                = null
     upgrade_settings    = null
     vm_size             = null
-    vnet_subnet_id      = one(data.azurerm_subnet.node[*].id)
+    vnet_subnet_id      = null
     } : {
     availability_zones  = var.default_node_pool.availability_zones
     count_of            = var.default_node_pool.node_count
@@ -68,6 +72,18 @@ locals {
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = one(data.azurerm_subnet.node[*].id)
   }
+  # The subnets an AKS Automatic cluster on an existing network runs in. AKS places the hosted system
+  # components apart from the workload nodes, so the two are named separately and have to be
+  # different subnets. This is the only route the node subnet takes for that SKU now that no default
+  # agent pool is sent - see `default_agent_pool` above.
+  #
+  # A cluster that brings no network sends no profile at all, and AKS hosts both in the network it
+  # creates. A Base cluster has no hosted system components and gets none of this.
+  hosted_system_profile = local.is_automatic && var.system_node_subnet_name != null ? {
+    enabled               = true
+    node_subnet_id        = one(data.azurerm_subnet.node[*].id)
+    system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
+  } : null
   # The pod and service ranges Azure assigns by itself when the create request carries no network
   # profile of its own. This is a RECORD OF WHAT AKS DOES, not a setting: editing it changes nothing
   # about the cluster, only what the overlap check below compares against. Change it only if Azure's

@@ -3,6 +3,10 @@ version: 2
 updates:
   # The AVM module and the provider versions in .terraform.lock.hcl. Pinned versions are only worth
   # pinning if something tells you when they go stale.
+  #
+  # The module itself is currently a git source pinned to a commit rather than a registry version -
+  # see "Why the module comes from a fork" in the README - and Dependabot does not follow those. It
+  # goes back to being watched here when the source goes back to the registry.
   - package-ecosystem: terraform
     directory: /
     schedule:

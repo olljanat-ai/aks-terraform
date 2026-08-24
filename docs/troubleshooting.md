@@ -87,9 +87,13 @@ previous attempt got visibly further.
 ### Narrow it down by what changed
 
 `prototype-free` builds in the same virtual network and the same node subnet. What an Automatic
-cluster adds is the system node subnet, the API server subnet, and API Server VNet Integration - so
-the fault is almost certainly in that delta rather than in something both share. Outbound from the
-node subnet and node-to-control-plane are already proven by the Base cluster working.
+cluster adds is the SKU itself and the system node subnet - so the fault is almost certainly in that
+delta rather than in something both share. Outbound from the node subnet and node-to-control-plane
+are already proven by the Base cluster working.
+
+The API server subnet and API Server VNet Integration used to be part of that delta, and are the
+reason `envs/prototype-automatic.tfvars` now sets `api_server_vnet_integration_enabled = false`. If
+the environment you are looking at has turned it back on, that is the first thing to take out again.
 
 Look at how far it got before it was failed off:
 
@@ -97,7 +101,8 @@ Look at how far it got before it was failed off:
 # Did any node ever appear? The node resource group is created early, the scale sets later.
 az resource list -g "MC_${RG}_${CLUSTER}_swedencentral" -o table
 
-# Did the API server get injected into its subnet? With VNet integration it takes addresses there.
+# Only with API Server VNet Integration on: did the API server get injected into its subnet? It
+# takes addresses there as it comes up.
 az network vnet subnet show -g "$RG" --vnet-name vnet-aks-prototype -n snet-aks-api \
   --query "{prefix:addressPrefix, delegations:delegations[].serviceName, ips:ipConfigurations[].id}" -o json
 
@@ -106,24 +111,24 @@ az monitor activity-log list -g "$RG" --offset 6h \
   --query "[?contains(resourceId, '$CLUSTER')].{op:operationName.value, status:status.value, sub:subStatus.value, msg:properties.statusMessage}" -o json
 ```
 
-- **No node resource group, no addresses in the API server subnet** - the failure is early. Suspect
-  the subnets: delegation, size, or an NSG.
+- **No node resource group** - the failure is early. Suspect the subnets: size, an NSG, or, where
+  the integration is on, the delegation of the API server subnet and the addresses it never took.
 - **Nodes exist but never became ready** - they could not reach the API server or the internet.
-  Suspect NSG rules between the node subnets and the API server subnet, or a route table.
+  Suspect a route table, or NSG rules on the node subnets - and on the API server subnet as well
+  while the integration is on.
 
 ### Isolate the configuration from the network
 
 The fastest way to tell whether the request is at fault or the network is to build an Automatic
 cluster next to it with none of this configuration's opinions - no disabled add-ons, no disabled
-ingress, nothing but the three subnets and the identity:
+ingress, nothing but the subnets and the identity:
 
 ```sh
 SUB=$(az account show --query id -o tsv)
 NET=/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/virtualNetworks/vnet-aks-prototype
 
 az aks create -g "$RG" -n aks-probe --location swedencentral --sku automatic --no-ssh-key \
-  --apiserver-subnet-id  "$NET/subnets/snet-aks-api" \
-  --node-subnet-id       "$NET/subnets/snet-aks-nodes" \
+  --node-subnet-id        "$NET/subnets/snet-aks-nodes" \
   --system-node-subnet-id "$NET/subnets/snet-aks-system" \
   --assign-identity "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sec-prototype-aks-automatic"
 ```
@@ -134,6 +139,10 @@ az aks create -g "$RG" -n aks-probe --location swedencentral --sku automatic --n
   Defender. Put them back one at a time.
 - **The probe times out the same way** - the request is not the problem. It is the subnets or the
   network policy around them, and the checks under [Common causes](#common-causes) apply.
+
+Add `--apiserver-subnet-id "$NET/subnets/snet-aks-api"` to probe the configuration that
+`envs/prototype-automatic.tfvars` no longer asks for. A probe that comes up without that line and
+hangs with it is the integration rather than anything this configuration sends.
 
 Delete the probe when it has answered the question: `az aks delete -g "$RG" -n aks-probe --yes`.
 
@@ -187,10 +196,14 @@ fails with an authorization error on a subnet.
 
 ### The API server subnet is not delegated, is too small, or is missing
 
-An Automatic cluster with no `api_server_subnet_name` at all runs without API Server VNet
-Integration. Microsoft documents the subnet as required for this SKU in an existing virtual network,
-so a cluster that is refused or hangs with that combination is the first thing to suspect - give it
-a delegated `/28` and try again.
+Only when API Server VNet Integration is on. `envs/prototype-automatic.tfvars` turns it off through
+`api_server_vnet_integration_enabled = false`, so there is no API server subnet to get wrong there -
+the cluster is created without one and the API server stays off the network.
+
+Microsoft documents the subnet as required for this SKU in an existing virtual network, so a cluster
+that is refused or hangs *without* one is a real possibility, and the README says what to weigh
+against it. Check the delegation and the size before concluding that, though: an integration that
+was on and pointed at a subnet AKS could not use looks the same from the outside.
 
 When there is one:
 

@@ -24,7 +24,7 @@ data "azurerm_subnet" "system_node" {
 }
 
 data "azurerm_subnet" "api_server" {
-  count = var.api_server_subnet_name == null ? 0 : 1
+  count = local.api_server_vnet_integration ? 1 : 0
 
   name                 = var.api_server_subnet_name
   resource_group_name  = local.virtual_network_resource_group_name
@@ -149,7 +149,7 @@ module "aks" {
     authorized_ip_ranges               = local.api_server_authorized_ip_ranges
     enable_private_cluster             = var.private_cluster_enabled
     enable_private_cluster_public_fqdn = var.private_cluster_enabled ? var.private_cluster_public_fqdn_enabled : null
-    enable_vnet_integration            = var.api_server_subnet_name == null ? null : true
+    enable_vnet_integration            = local.api_server_vnet_integration ? true : null
     private_dns_zone                   = local.private_dns_zone
     subnet_id                          = one(data.azurerm_subnet.api_server[*].id)
   }
@@ -263,10 +263,14 @@ check "api_server_exposure" {
 # existing virtual network - the API server is injected into that subnet, and there is nowhere else
 # in the network for it to go. Terraform warns rather than refuses, because the requirement is
 # Microsoft's rather than something that can be checked here, and Azure has the final say.
+#
+# An environment that has turned the integration off through api_server_vnet_integration_enabled is
+# left alone: the missing subnet is the decision there, not an omission, and a warning on every plan
+# would only train people to ignore this one.
 check "automatic_api_server_subnet" {
   assert {
-    condition     = !local.is_automatic || var.api_server_subnet_name != null
-    error_message = "${var.name} is an AKS Automatic cluster in an existing virtual network with no api_server_subnet_name, so API Server VNet Integration is off. Microsoft documents a subnet delegated to Microsoft.ContainerService/managedClusters as required for this combination; Azure may refuse the cluster or leave it in Creating."
+    condition     = !local.is_automatic || !var.api_server_vnet_integration_enabled || var.api_server_subnet_name != null
+    error_message = "${var.name} is an AKS Automatic cluster in an existing virtual network with no api_server_subnet_name, so API Server VNet Integration is off. Microsoft documents a subnet delegated to Microsoft.ContainerService/managedClusters as required for this combination; Azure may refuse the cluster or leave it in Creating. Set api_server_vnet_integration_enabled = false to state that this is deliberate."
   }
 }
 

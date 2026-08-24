@@ -77,8 +77,32 @@ Name of the existing subnet used for API Server VNet Integration. The subnet mus
 
 Leave it unset for a cluster whose API server is not joined to the network. Microsoft documents the
 subnet as required for an AKS Automatic cluster in an existing virtual network, so Terraform warns
-about that combination rather than refusing it.
+about that combination rather than refusing it - unless the integration is turned off deliberately
+through `api_server_vnet_integration_enabled`, which is what `envs/prototype-automatic.tfvars` does.
 DESCRIPTION
+
+  # Naming a subnet for an API server that is not joined to the network says two different things at
+  # once. Rather than quietly dropping one of them, the combination is refused.
+  validation {
+    condition     = var.api_server_vnet_integration_enabled || var.api_server_subnet_name == null
+    error_message = "api_server_subnet_name names a subnet for an API server that is not joined to the network. Leave it unset while api_server_vnet_integration_enabled = false, or set that back to true to use the subnet."
+  }
+}
+
+variable "api_server_vnet_integration_enabled" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+Whether the API server may be joined to the existing virtual network. The integration only actually
+happens when `api_server_subnet_name` also names a subnet to inject it into, so leaving this at its
+default changes nothing on its own.
+
+Set it to `false` to turn API Server VNet Integration off for good in an environment: naming a
+subnet is then refused rather than ignored, and the warning about an AKS Automatic cluster without
+one is dropped, because the absence is the point rather than an oversight. The API server is reached
+over its public or AKS-managed private endpoint instead, exactly as it is on a `Base` cluster here.
+DESCRIPTION
+  nullable    = false
 }
 
 variable "auto_upgrade" {

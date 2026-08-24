@@ -4,6 +4,10 @@ locals {
   aks_api_version = "2026-03-01"
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
+  # Whether the API server is joined to the existing network. It takes both halves: the integration
+  # turned on and a subnet to inject the API server into. Either one missing leaves the API server
+  # where AKS puts it by default, and nothing about the subnet reaches Azure.
+  api_server_vnet_integration = var.api_server_vnet_integration_enabled && var.api_server_subnet_name != null
   # Tags the cluster already carries in Azure, or null while it does not exist yet or carries none.
   # Feeding them back keeps the tags out of the plan instead of having Terraform delete them.
   cluster_tags = try(data.azapi_resource_list.managed_clusters.output.tags, null)
@@ -133,7 +137,7 @@ locals {
   network_role_assignment_subnet_scopes = merge(
     { node_subnet = data.azurerm_subnet.node.id },
     var.system_node_subnet_name == null ? {} : { system_node_subnet = data.azurerm_subnet.system_node[0].id },
-    var.api_server_subnet_name == null ? {} : { api_server_subnet = data.azurerm_subnet.api_server[0].id },
+    !local.api_server_vnet_integration ? {} : { api_server_subnet = data.azurerm_subnet.api_server[0].id },
   )
   # Whether the module sends a `network_profile` at all. It drops the whole profile - the pod and
   # service ranges with it - for an Automatic cluster left on the default `loadBalancer` egress,

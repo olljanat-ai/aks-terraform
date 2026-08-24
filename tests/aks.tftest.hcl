@@ -763,6 +763,82 @@ run "warns_about_automatic_without_api_server_vnet_integration" {
   expect_failures = [check.automatic_api_server_subnet]
 }
 
+# Turning the integration off is a decision rather than an omission, so the warning above goes with
+# it. This is what envs/prototype-automatic.tfvars asks for.
+run "automatic_with_vnet_integration_turned_off_is_not_warned_about" {
+  command = plan
+
+  variables {
+    sku_name                            = "Automatic"
+    sku_tier                            = "Standard"
+    system_node_subnet_name             = "snet-aks-system"
+    api_server_vnet_integration_enabled = false
+  }
+
+  assert {
+    condition     = !local.api_server_vnet_integration
+    error_message = "The API server should not be joined to the network while the integration is off."
+  }
+  assert {
+    condition     = length(data.azurerm_subnet.api_server) == 0
+    error_message = "No API server subnet should be looked up while the integration is off."
+  }
+}
+
+# The subnet is still granted to the cluster identity when the integration is on and the scope is
+# narrowed to the subnets; with the integration off there is nothing there to grant.
+run "no_api_server_subnet_assignment_while_the_integration_is_off" {
+  command = plan
+
+  variables {
+    sku_name                            = "Automatic"
+    sku_tier                            = "Standard"
+    system_node_subnet_name             = "snet-aks-system"
+    api_server_vnet_integration_enabled = false
+    network_role_assignment_scope       = "subnet"
+  }
+
+  override_data {
+    target = data.azurerm_subnet.system_node[0]
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test/subnets/snet-aks-system"
+    }
+  }
+
+  expect_failures = [check.automatic_network_role_assignment_scope]
+
+  assert {
+    condition     = keys(azurerm_role_assignment.network_contributor) == ["node_subnet", "system_node_subnet"]
+    error_message = "Only the node and system node subnets should be granted while the integration is off."
+  }
+}
+
+# Saying "no integration" and naming a subnet for it at the same time is refused, rather than one of
+# the two being dropped silently.
+run "rejects_an_api_server_subnet_while_the_integration_is_off" {
+  command = plan
+
+  variables {
+    sku_name                            = "Automatic"
+    sku_tier                            = "Standard"
+    system_node_subnet_name             = "snet-aks-system"
+    api_server_subnet_name              = "snet-aks-apiserver"
+    api_server_vnet_integration_enabled = false
+  }
+
+  expect_failures = [var.api_server_subnet_name]
+}
+
+# A Base cluster keeps its own default: nothing to turn off, nothing to warn about.
+run "the_integration_is_off_by_default_without_a_subnet_to_join" {
+  command = plan
+
+  assert {
+    condition     = !local.api_server_vnet_integration
+    error_message = "A cluster with no api_server_subnet_name should not ask for VNet integration."
+  }
+}
+
 run "rejects_automatic_on_the_free_tier" {
   command = plan
 

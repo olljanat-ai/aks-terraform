@@ -25,6 +25,7 @@ network_profile = {
   network_dataplane   = "azure"
 }
 cost_analysis_enabled = false
+azure_policy_enabled = false
 
 # Private by default. Set to false, and optionally restrict the source ranges, for a public cluster.
 private_cluster_enabled         = false

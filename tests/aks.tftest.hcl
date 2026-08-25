@@ -302,7 +302,7 @@ run "automatic_sends_no_base_cluster_node_pool_settings" {
     api_server_subnet_name  = "snet-aks-apiserver"
     system_node_subnet_name = "snet-aks-system"
     default_node_pool = {
-      vm_size             = "Standard_B2s"
+      vm_size             = "Standard_D4ds_v5"
       enable_auto_scaling = false
       node_count          = 1
     }

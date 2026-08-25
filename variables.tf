@@ -217,12 +217,12 @@ DESCRIPTION
 
 variable "default_node_pool" {
   type = object({
-    name                = optional(string, "systempool")
+    name                = optional(string, "system")
     vm_size             = optional(string, "Standard_D4ds_v5")
-    node_count          = optional(number, 2)
-    enable_auto_scaling = optional(bool, true)
-    min_count           = optional(number, 2)
-    max_count           = optional(number, 4)
+    node_count          = optional(number, 1)
+    enable_auto_scaling = optional(bool, false)
+    min_count           = optional(number, 1)
+    max_count           = optional(number, 1)
     max_pods            = optional(number)
     os_disk_size_gb     = optional(number)
     availability_zones  = optional(list(string))

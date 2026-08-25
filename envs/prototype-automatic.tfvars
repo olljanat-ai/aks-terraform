@@ -51,5 +51,9 @@ api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 
 entra_admin_group_object_ids = []
 
-# default_node_pool is deliberately left out. AKS Automatic sizes, scales and rolls its own node
-# pools, and everything this variable carries is dropped for this SKU - see the README.
+# Workaround to https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster/issues/296
+default_node_pool = {
+  vm_size             = "Standard_D4ds_v5" # Requires size with >= 150 GB local disk
+  enable_auto_scaling = false
+  node_count          = 1
+}

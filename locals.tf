@@ -34,20 +34,7 @@ locals {
   # the agent pool afterwards - the one that exists because the cluster resource ignores changes to
   # `agentPoolProfiles` - is not filtered at all, so a VM size, an autoscaler setting and a set of
   # upgrade settings reach an Automatic cluster that has no place to put them.
-  default_agent_pool = local.is_automatic ? {
-    availability_zones  = null
-    count_of            = null
-    enable_auto_scaling = null
-    max_count           = null
-    max_pods            = null
-    min_count           = null
-    name                = var.default_node_pool.name
-    os_disk_size_gb     = null
-    type                = null
-    upgrade_settings    = null
-    vm_size             = null
-    vnet_subnet_id      = one(data.azurerm_subnet.node[*].id)
-    } : {
+  default_agent_pool = {
     availability_zones  = var.default_node_pool.availability_zones
     count_of            = var.default_node_pool.node_count
     enable_auto_scaling = var.default_node_pool.enable_auto_scaling

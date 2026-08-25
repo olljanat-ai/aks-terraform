@@ -254,10 +254,32 @@ module "aks" {
     }
     image_cleaner = {
       enabled        = true
-      interval_hours = 168
+      interval_hours = 24
+    }
+
+    # TODO: Check if these needs to be parametrized in system level
+    # or if namespace level is enough?
+    azure_key_vault_kms = {
+      enabled = false
     }
     workload_identity = {
-      enabled = true
+      enabled = false
+    }
+
+    # TODO: Parameterize these and enable what is needed
+    storage_profile = {
+      blob_csi_driver = {
+        enabled = false
+      }
+      disk_csi_driver = {
+        enabled = false
+      }
+      file_csi_driver = {
+        enabled = false
+      }
+      snapshot_controller = {
+        enabled = false
+      }
     }
   }
 

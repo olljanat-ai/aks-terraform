@@ -23,7 +23,7 @@ locals {
   cluster_tags = try(data.azapi_resource_list.managed_clusters.output.tags, null)
   # Cost analysis breaks the cluster spend down by namespace and deployment in Azure Cost
   # Management. Azure sells it with the paid tiers only and refuses the request on Free.
-  cost_analysis_enabled = var.sku_tier != "Free"
+  cost_analysis_enabled = var.cost_analysis_enabled == null ? null : var.cost_analysis_enabled
   # What of `default_node_pool` reaches Azure. A Base cluster gets all of it. An AKS Automatic
   # cluster sizes, scales and rolls its own node pools, so it gets only the name and the node
   # subnet - what the module's own Automatic example sends - and the count falls back to the three

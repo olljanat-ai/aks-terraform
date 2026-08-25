@@ -602,3 +602,8 @@ variable "virtual_network_resource_group_name" {
   default     = null
   description = "Resource group of the existing virtual network. Defaults to `resource_group_name`."
 }
+
+variable "cost_analysis_enabled" {
+  type    = bool
+  default = true
+}

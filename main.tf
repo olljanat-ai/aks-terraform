@@ -209,6 +209,9 @@ module "aks" {
           mode = "Disabled"
         }
       }
+      nginx = {
+        default_ingress_controller_type = "None"
+      }
     }
   }
   kubernetes_version = var.kubernetes_version

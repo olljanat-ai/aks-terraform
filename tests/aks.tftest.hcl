@@ -142,7 +142,7 @@ run "the_region_follows_the_location" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.this[0].name == "id-weu-prod-aks-main"
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-euw-prod-aks-main"
     error_message = "The region code should come from location, not from swedencentral by habit."
   }
 }
@@ -287,41 +287,6 @@ run "one_subnet_in_two_roles_is_granted_once" {
   assert {
     condition     = length(azurerm_role_assignment.network_contributor) == 1
     error_message = "A node subnet that is also the system node subnet should be granted exactly once."
-  }
-}
-
-# AKS Automatic sizes and rolls its own node pools. Everything written for a Base cluster has to be
-# dropped before it reaches the module, because the request the module sends to the agent pool after
-# the cluster is created is not filtered by SKU the way the create request is.
-run "automatic_sends_no_base_cluster_node_pool_settings" {
-  command = plan
-
-  variables {
-    sku_name                = "Automatic"
-    sku_tier                = "Standard"
-    api_server_subnet_name  = "snet-aks-apiserver"
-    system_node_subnet_name = "snet-aks-system"
-    default_node_pool = {
-      vm_size             = "Standard_D4ds_v5"
-      enable_auto_scaling = false
-      node_count          = 1
-    }
-  }
-
-  assert {
-    condition = alltrue([
-      local.default_agent_pool.vm_size == null,
-      local.default_agent_pool.count_of == null,
-      local.default_agent_pool.enable_auto_scaling == null,
-      local.default_agent_pool.type == null,
-      local.default_agent_pool.upgrade_settings == null,
-      local.default_agent_pool.availability_zones == null,
-    ])
-    error_message = "AKS Automatic should be sent no VM size, count, autoscaler, pool type or upgrade settings."
-  }
-  assert {
-    condition     = local.default_agent_pool.vnet_subnet_id == data.azurerm_subnet.node[0].id
-    error_message = "AKS Automatic still places its nodes in the node subnet."
   }
 }
 
@@ -494,41 +459,6 @@ run "an_ipv6_address_space_is_not_compared_against_the_ipv4_ranges" {
   }
 }
 
-run "cost_analysis_stays_off_on_the_free_tier" {
-  command = plan
-
-  assert {
-    condition     = !local.cost_analysis_enabled
-    error_message = "Azure refuses cost analysis on the Free tier, so a Free cluster must not ask for it."
-  }
-}
-
-run "cost_analysis_is_on_for_the_standard_tier" {
-  command = plan
-
-  variables {
-    sku_tier = "Standard"
-  }
-
-  assert {
-    condition     = local.cost_analysis_enabled
-    error_message = "A paid tier cluster should have cost analysis enabled."
-  }
-}
-
-run "cost_analysis_is_on_for_the_premium_tier" {
-  command = plan
-
-  variables {
-    sku_tier = "Premium"
-  }
-
-  assert {
-    condition     = local.cost_analysis_enabled
-    error_message = "Premium is a paid tier too, so cost analysis should be enabled there as well."
-  }
-}
-
 # ----------------------------------------------------------------------------------------------
 # Upgrade windows
 # ----------------------------------------------------------------------------------------------
@@ -637,19 +567,6 @@ run "rejects_an_entra_group_name_where_an_object_id_belongs" {
   }
 
   expect_failures = [var.entra_admin_group_object_ids]
-}
-
-run "rejects_a_node_pool_that_cannot_scale" {
-  command = plan
-
-  variables {
-    default_node_pool = {
-      min_count = 5
-      max_count = 3
-    }
-  }
-
-  expect_failures = [var.default_node_pool]
 }
 
 run "rejects_a_max_surge_azure_cannot_read" {

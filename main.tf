@@ -139,8 +139,9 @@ resource "time_sleep" "role_assignment_propagation" {
 }
 
 module "aks" {
-  source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
-  version = "0.8.1"
+  # source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
+  # version = "0.8.1"
+  source = "git::https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster.git?ref=89d17765b535b03736993972675f40d3c31c8b34"
 
   location  = var.location
   name      = var.name
@@ -257,15 +258,12 @@ module "aks" {
     }
     image_cleaner = {
       enabled        = true
-      interval_hours = 24
+      interval_hours = 168
     }
 
     # TODO: Check if these needs to be parametrized in system level
     # or if namespace level is enough?
     azure_key_vault_kms = {
-      enabled = false
-    }
-    workload_identity = {
       enabled = false
     }
 

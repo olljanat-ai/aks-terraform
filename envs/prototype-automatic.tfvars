@@ -52,8 +52,10 @@ api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 entra_admin_group_object_ids = []
 
 # Workaround to https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster/issues/296
+/*
 default_node_pool = {
   vm_size             = "Standard_D4ds_v5" # Requires size with >= 150 GB local disk
   enable_auto_scaling = false
   node_count          = 1
 }
+*/

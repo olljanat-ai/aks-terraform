@@ -260,28 +260,6 @@ module "aks" {
       enabled        = true
       interval_hours = 168
     }
-
-    # TODO: Check if these needs to be parametrized in system level
-    # or if namespace level is enough?
-    azure_key_vault_kms = {
-      enabled = false
-    }
-
-    # TODO: Parameterize these and enable what is needed
-    storage_profile = {
-      blob_csi_driver = {
-        enabled = false
-      }
-      disk_csi_driver = {
-        enabled = false
-      }
-      file_csi_driver = {
-        enabled = false
-      }
-      snapshot_controller = {
-        enabled = false
-      }
-    }
   }
 
   auto_upgrade_profile = {

@@ -49,7 +49,13 @@ api_server_vnet_integration_enabled = false
 private_cluster_enabled         = false
 api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 
-entra_admin_group_object_ids = []
+# Cluster access. An Automatic cluster always authorizes through Microsoft Entra ID with Azure RBAC,
+# so these groups are granted their access as role assignments on the cluster: `Azure Kubernetes
+# Service RBAC Cluster Admin` for the admins, `... RBAC Reader` for the readers. Members of both
+# still need `Azure Kubernetes Service Cluster User Role` on the cluster to download a kubeconfig at
+# all, which is granted elsewhere.
+entra_admin_group_object_ids  = []
+entra_reader_group_object_ids = []
 
 # Workaround to https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster/issues/296
 /*

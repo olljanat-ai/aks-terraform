@@ -23,6 +23,24 @@ locals {
   # where AKS puts it by default, and nothing about the subnet reaches Azure.
   api_server_vnet_integration = var.api_server_vnet_integration_enabled && var.api_server_subnet_name != null
 
+  # How the cluster authorizes calls to the Kubernetes API. With Azure RBAC - "Microsoft Entra ID
+  # authentication with Azure RBAC" - AKS decides every call from Azure role assignments on the
+  # cluster; without it the cluster falls back to Kubernetes RBAC, where the only Entra ID groups
+  # that get anything are the admin groups of the cluster's own Entra ID profile. AKS Automatic is
+  # preconfigured with Azure RBAC and cannot be moved off it, so the SKU overrides the variable
+  # rather than sending Azure a request it would ignore.
+  azure_rbac_enabled = local.is_automatic || var.azure_rbac_enabled
+
+  # The admin groups sent in the cluster's Entra ID profile. Under Azure RBAC they are not honored -
+  # authorization comes from the role assignments below instead - so nothing is sent there, which is
+  # also what Azure itself reports for such a cluster: `"adminGroupObjectIds": null`.
+  kubernetes_rbac_admin_group_object_ids = local.azure_rbac_enabled ? null : var.entra_admin_group_object_ids
+
+  # Whether the group grants on the cluster are made here. They only exist under Azure RBAC, and
+  # they are role assignments like any other, so an estate that has role assignments managed
+  # elsewhere gets these from there too.
+  create_entra_group_role_assignments = local.azure_rbac_enabled && var.create_role_assignments
+
   # Tags the cluster already carries in Azure, or null while it does not exist yet or carries none.
   # Feeding them back keeps the tags out of the plan instead of having Terraform delete them.
   cluster_tags = try(data.azapi_resource_list.managed_clusters.output.tags, null)

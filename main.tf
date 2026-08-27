@@ -147,8 +147,8 @@ module "aks" {
   name      = var.name
   parent_id = data.azurerm_resource_group.this.id
   aad_profile = {
-    admin_group_object_ids = var.entra_admin_group_object_ids
-    enable_azure_rbac      = true
+    admin_group_object_ids = local.kubernetes_rbac_admin_group_object_ids
+    enable_azure_rbac      = local.azure_rbac_enabled
     managed                = true
     tenant_id              = data.azurerm_client_config.current.tenant_id
   }
@@ -273,6 +273,41 @@ module "aks" {
   ]
 }
 
+# Cluster admin for the Entra ID groups that are meant to have it, under Azure RBAC. The groups the
+# cluster itself carries in its Entra ID profile - `admin_group_object_ids` above - are not honored
+# in this mode, so the grant is a role assignment on the cluster instead, and the same list means
+# one or the other depending on how the cluster authorizes. `Azure Kubernetes Service RBAC Cluster
+# Admin` is the Azure role that answers to `cluster-admin` inside the cluster.
+#
+# It does not let anyone download a kubeconfig: that takes `Azure Kubernetes Service Cluster User
+# Role` on the cluster, which is a control plane role and is not created here.
+resource "azurerm_role_assignment" "entra_cluster_admin" {
+  for_each = toset(local.create_entra_group_role_assignments ? var.entra_admin_group_object_ids : [])
+
+  principal_id         = each.value
+  scope                = module.aks.resource_id
+  role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
+  # Stated, so that Azure takes the object ID as given rather than looking the principal up: a group
+  # created moments ago has not replicated everywhere yet, and the assignment fails on a principal
+  # Azure cannot find.
+  principal_type = "Group"
+}
+
+# Read-only access for the Entra ID groups that only need to look. `Azure Kubernetes Service RBAC
+# Reader` reads most objects in every namespace, but not `Secrets` - reading those is a way to act
+# as any service account in the namespace - and not roles or role bindings.
+#
+# Azure RBAC only. Kubernetes RBAC has no counterpart: the cluster's Entra ID profile carries admin
+# groups and nothing else, so a reader group has nowhere to go and the check below says so.
+resource "azurerm_role_assignment" "entra_reader" {
+  for_each = toset(local.create_entra_group_role_assignments ? var.entra_reader_group_object_ids : [])
+
+  principal_id         = each.value
+  scope                = module.aks.resource_id
+  role_definition_name = "Azure Kubernetes Service RBAC Reader"
+  principal_type       = "Group"
+}
+
 # A public API server with no allowlist is reachable from anywhere on the internet, and Azure will
 # not stop you from creating one. Terraform reports this as a warning rather than an error, because
 # it is a legitimate choice for a throwaway cluster and a bad one for anything else.
@@ -322,6 +357,36 @@ check "automatic_network_role_assignment_scope" {
   assert {
     condition     = !local.is_automatic || !local.byo_network || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
     error_message = "${var.name} is an AKS Automatic cluster scoped to its subnets. Node autoprovisioning creates node pools the subnet assignments do not cover, and the cluster can sit in Creating until it times out. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
+  }
+}
+
+# Azure preconfigures an Automatic cluster with Microsoft Entra ID authentication with Azure RBAC and
+# gives it no way off, so `azure_rbac_enabled = false` is overridden rather than sent. The groups are
+# granted through role assignments regardless of what the variable says, and this warns that the
+# variable is not what decided it.
+check "automatic_is_always_authorized_through_azure_rbac" {
+  assert {
+    condition     = !local.is_automatic || var.azure_rbac_enabled
+    error_message = "${var.name} is an AKS Automatic cluster with azure_rbac_enabled = false. Azure preconfigures Automatic with Microsoft Entra ID authentication with Azure RBAC, so the cluster is authorized that way regardless and the Entra ID groups are granted their access as role assignments on it. Leave azure_rbac_enabled unset, or use the Base SKU to authorize through Kubernetes RBAC."
+  }
+}
+
+# Read-only access exists in Azure RBAC only. Under Kubernetes RBAC the cluster's Entra ID profile
+# takes admin groups and nothing else, so listed reader groups are granted nothing at all - by
+# Terraform or by anyone else - and the silence is worth a word.
+check "reader_groups_need_azure_rbac" {
+  assert {
+    condition     = local.azure_rbac_enabled || length(var.entra_reader_group_object_ids) == 0
+    error_message = "${var.name} authorizes through Kubernetes RBAC, where entra_reader_group_object_ids has no equivalent: the cluster's Entra ID profile carries admin groups only, so those ${length(var.entra_reader_group_object_ids)} group(s) are granted nothing. Set azure_rbac_enabled = true to grant them Azure Kubernetes Service RBAC Reader, or bind them inside the cluster with a Kubernetes ClusterRoleBinding."
+  }
+}
+
+# With role assignments managed elsewhere, the groups are named here but granted somewhere else -
+# and nobody notices until the first kubectl comes back forbidden.
+check "entra_groups_are_granted_somewhere" {
+  assert {
+    condition     = var.create_role_assignments || !local.azure_rbac_enabled || length(var.entra_admin_group_object_ids) + length(var.entra_reader_group_object_ids) == 0
+    error_message = "${var.name} has create_role_assignments = false, so the Entra ID groups listed for it are not granted anything here. Assign Azure Kubernetes Service RBAC Cluster Admin to entra_admin_group_object_ids and Azure Kubernetes Service RBAC Reader to entra_reader_group_object_ids on the cluster wherever the role assignments of this estate are managed."
   }
 }
 

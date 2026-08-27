@@ -509,6 +509,138 @@ run "an_allowlisted_public_api_server_raises_nothing" {
 }
 
 # ----------------------------------------------------------------------------------------------
+# Entra ID group access
+# ----------------------------------------------------------------------------------------------
+
+# Azure RBAC is how these clusters authorize the Kubernetes API, and there the groups are granted
+# Azure roles on the cluster. The admin groups of the cluster's own Entra ID profile are not honored
+# in that mode, so nothing is sent there.
+run "azure_rbac_grants_the_entra_groups_on_the_cluster" {
+  command = plan
+
+  variables {
+    entra_admin_group_object_ids  = ["22222222-2222-2222-2222-222222222222"]
+    entra_reader_group_object_ids = ["33333333-3333-3333-3333-333333333333"]
+  }
+
+  assert {
+    condition     = local.azure_rbac_enabled && local.kubernetes_rbac_admin_group_object_ids == null
+    error_message = "A cluster on Azure RBAC should send no admin groups in its Entra ID profile."
+  }
+  assert {
+    condition     = keys(azurerm_role_assignment.entra_cluster_admin) == ["22222222-2222-2222-2222-222222222222"]
+    error_message = "Each admin group should get an assignment of its own."
+  }
+  assert {
+    condition     = azurerm_role_assignment.entra_cluster_admin["22222222-2222-2222-2222-222222222222"].role_definition_name == "Azure Kubernetes Service RBAC Cluster Admin"
+    error_message = "Cluster admin under Azure RBAC is the Azure Kubernetes Service RBAC Cluster Admin role."
+  }
+  assert {
+    condition     = azurerm_role_assignment.entra_cluster_admin["22222222-2222-2222-2222-222222222222"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test"
+    error_message = "The grant belongs on the cluster, not on the resource group around it."
+  }
+  assert {
+    condition     = azurerm_role_assignment.entra_reader["33333333-3333-3333-3333-333333333333"].role_definition_name == "Azure Kubernetes Service RBAC Reader"
+    error_message = "Read-only access under Azure RBAC is the Azure Kubernetes Service RBAC Reader role."
+  }
+  assert {
+    condition     = azurerm_role_assignment.entra_cluster_admin["22222222-2222-2222-2222-222222222222"].principal_type == "Group"
+    error_message = "The principal is a group, and saying so keeps Azure from looking one up that has not replicated yet."
+  }
+}
+
+run "a_cluster_with_no_entra_groups_grants_nothing" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_role_assignment.entra_cluster_admin) == 0 && length(azurerm_role_assignment.entra_reader) == 0
+    error_message = "Nothing should be granted to groups that were never named."
+  }
+}
+
+# Kubernetes RBAC is the other half of the same decision: no role assignments, and the admin groups
+# ride along in the cluster's Entra ID profile instead, where they are bound to cluster-admin.
+run "kubernetes_rbac_sends_the_admin_groups_with_the_cluster" {
+  command = plan
+
+  variables {
+    azure_rbac_enabled           = false
+    entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
+  }
+
+  assert {
+    condition     = local.kubernetes_rbac_admin_group_object_ids == tolist(["22222222-2222-2222-2222-222222222222"])
+    error_message = "Without Azure RBAC the admin groups are the only way in, so they have to reach the cluster."
+  }
+  assert {
+    condition     = length(azurerm_role_assignment.entra_cluster_admin) == 0
+    error_message = "An Azure role assignment authorizes nothing on a cluster that runs on Kubernetes RBAC."
+  }
+}
+
+# Read-only access has no counterpart in Kubernetes RBAC: the Entra ID profile of the cluster carries
+# admin groups and nothing else, so the reader groups are granted nothing and are warned about.
+run "warns_about_reader_groups_without_azure_rbac" {
+  command = plan
+
+  variables {
+    azure_rbac_enabled            = false
+    entra_reader_group_object_ids = ["33333333-3333-3333-3333-333333333333"]
+  }
+
+  expect_failures = [check.reader_groups_need_azure_rbac]
+
+  assert {
+    condition     = length(azurerm_role_assignment.entra_reader) == 0
+    error_message = "There is no read-only grant to make while the cluster authorizes through Kubernetes RBAC."
+  }
+}
+
+# Azure preconfigures Automatic with Azure RBAC and gives it no way off, so the SKU decides and the
+# groups are granted as role assignments regardless of what the variable asked for.
+run "automatic_stays_on_azure_rbac_whatever_the_variable_says" {
+  command = plan
+
+  variables {
+    sku_name                     = "Automatic"
+    sku_tier                     = "Standard"
+    api_server_subnet_name       = "snet-aks-apiserver"
+    system_node_subnet_name      = "snet-aks-system"
+    azure_rbac_enabled           = false
+    entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
+  }
+
+  expect_failures = [check.automatic_is_always_authorized_through_azure_rbac]
+
+  assert {
+    condition     = local.azure_rbac_enabled && local.kubernetes_rbac_admin_group_object_ids == null
+    error_message = "An Automatic cluster is authorized through Azure RBAC whatever azure_rbac_enabled says."
+  }
+  assert {
+    condition     = length(azurerm_role_assignment.entra_cluster_admin) == 1
+    error_message = "The admin groups of an Automatic cluster are granted as role assignments on it."
+  }
+}
+
+# With the role assignments of the estate managed elsewhere, the groups are named here and granted
+# there - which is worth saying out loud, because the cluster is otherwise unreachable.
+run "warns_about_entra_groups_with_role_assignments_managed_elsewhere" {
+  command = plan
+
+  variables {
+    create_role_assignments      = false
+    entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
+  }
+
+  expect_failures = [check.entra_groups_are_granted_somewhere]
+
+  assert {
+    condition     = length(azurerm_role_assignment.entra_cluster_admin) == 0
+    error_message = "create_role_assignments = false should create no assignments."
+  }
+}
+
+# ----------------------------------------------------------------------------------------------
 # Input validation
 # ----------------------------------------------------------------------------------------------
 
@@ -567,6 +699,16 @@ run "rejects_an_entra_group_name_where_an_object_id_belongs" {
   }
 
   expect_failures = [var.entra_admin_group_object_ids]
+}
+
+run "rejects_an_entra_reader_group_name_where_an_object_id_belongs" {
+  command = plan
+
+  variables {
+    entra_reader_group_object_ids = ["aks-readers"]
+  }
+
+  expect_failures = [var.entra_reader_group_object_ids]
 }
 
 run "rejects_a_max_surge_azure_cannot_read" {

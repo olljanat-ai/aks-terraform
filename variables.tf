@@ -172,6 +172,21 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "azure_rbac_enabled" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+Whether the cluster authorizes the Kubernetes API through Azure RBAC - "Microsoft Entra ID
+authentication with Azure RBAC" - rather than through Kubernetes RBAC. Always on for the Automatic
+SKU, which Azure preconfigures with it and does not let a cluster off.
+
+This decides how `entra_admin_group_object_ids` and `entra_reader_group_object_ids` reach the
+cluster: as Azure role assignments on it, or as the admin groups of its own Entra ID profile. See
+those two.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "cluster_timeouts" {
   type = object({
     create = optional(string, "90m")
@@ -207,10 +222,13 @@ variable "create_role_assignments" {
   type        = bool
   default     = true
   description = <<DESCRIPTION
-Create the role assignments the cluster identity needs on the existing network and private DNS zone.
-Set to `false` when the assignments are managed elsewhere - the deployment then requires no
-`Microsoft.Authorization/roleAssignments/write` permission. A cluster that brings no network has no
-network assignments to create either way.
+Create the role assignments made here: the ones the cluster identity needs on the existing network
+and private DNS zone, and the ones that grant `entra_admin_group_object_ids` and
+`entra_reader_group_object_ids` their access to the cluster under Azure RBAC. Set to `false` when
+the assignments are managed elsewhere - the deployment then requires no
+`Microsoft.Authorization/roleAssignments/write` permission, and has to be given every one of those
+grants by whoever does manage them. A cluster that brings no network has no network assignments to
+create either way.
 DESCRIPTION
   nullable    = false
 }
@@ -295,12 +313,46 @@ variable "enable_telemetry" {
 variable "entra_admin_group_object_ids" {
   type        = list(string)
   default     = []
-  description = "Object IDs of the Microsoft Entra ID groups granted cluster admin."
+  description = <<DESCRIPTION
+Object IDs of the Microsoft Entra ID groups granted cluster admin. How they are granted follows
+`azure_rbac_enabled`, because the two authorization modes have nothing in common:
+
+- With Azure RBAC, each group is assigned `Azure Kubernetes Service RBAC Cluster Admin` on the
+  cluster. The admin groups of the cluster's Entra ID profile are not honored in this mode, so
+  nothing is sent there.
+- With Kubernetes RBAC, each group becomes an admin group of the cluster's Entra ID profile, which
+  binds it to `cluster-admin` inside the cluster. No role assignment is created.
+
+Members still need `Azure Kubernetes Service Cluster User Role` on the cluster to download a
+kubeconfig at all; that one is not created here.
+DESCRIPTION
   nullable    = false
 
   validation {
     condition     = alltrue([for id in var.entra_admin_group_object_ids : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", id))])
     error_message = "entra_admin_group_object_ids must contain group object IDs as GUIDs, not group names."
+  }
+}
+
+variable "entra_reader_group_object_ids" {
+  type        = list(string)
+  default     = []
+  description = <<DESCRIPTION
+Object IDs of the Microsoft Entra ID groups granted read-only access to the cluster, by assigning
+them `Azure Kubernetes Service RBAC Reader` on it. That role reads most objects in every namespace,
+but not `Secrets` and not roles or role bindings.
+
+Azure RBAC only. Kubernetes RBAC has no equivalent - the cluster's Entra ID profile carries admin
+groups and nothing else - so these groups are granted nothing while `azure_rbac_enabled = false`.
+
+Members still need `Azure Kubernetes Service Cluster User Role` on the cluster to download a
+kubeconfig at all; that one is not created here.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for id in var.entra_reader_group_object_ids : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", id))])
+    error_message = "entra_reader_group_object_ids must contain group object IDs as GUIDs, not group names."
   }
 }
 

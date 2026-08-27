@@ -101,7 +101,8 @@ tflint --init && tflint
 
 Local Kubernetes accounts are **disabled**, so there is no cluster-admin certificate to hand around
 and `az aks get-credentials --admin` does not work. Everything authenticates as an Entra ID
-identity, and Azure RBAC decides what that identity may do inside the cluster.
+identity, and by default [Azure RBAC][entraauthz] decides what that identity may do inside the
+cluster.
 
 ```sh
 az aks get-credentials --resource-group <resource_group_name> --name "$(terraform output -raw name)"
@@ -111,9 +112,40 @@ kubectl get nodes
 Two things have to be granted before that returns anything:
 
 - **`Azure Kubernetes Service Cluster User Role`** on the cluster, to download a kubeconfig at all.
-- A Kubernetes-level role, either by listing a group in `entra_admin_group_object_ids` or by
-  assigning `Azure Kubernetes Service RBAC Cluster Admin`, `... RBAC Admin`, `... RBAC Writer` or
-  `... RBAC Reader` on the cluster or on a namespace inside it.
+  This one is never created here, whichever mode the cluster runs in.
+- A Kubernetes-level role, which is what `entra_admin_group_object_ids` and
+  `entra_reader_group_object_ids` are for.
+
+### Which authorization mode, and what the groups mean in it
+
+`azure_rbac_enabled` picks the mode, and the same group list means two entirely different things
+depending on it:
+
+| `azure_rbac_enabled` | Mode | How the groups are granted |
+| --- | --- | --- |
+| `true` (the default; always on for **Automatic**) | Microsoft Entra ID authentication with Azure RBAC | Azure role assignments on the cluster |
+| `false` | Microsoft Entra ID authentication with Kubernetes RBAC | Admin groups of the cluster's own Entra ID profile |
+
+- **With Azure RBAC**, every group in `entra_admin_group_object_ids` is assigned
+  `Azure Kubernetes Service RBAC Cluster Admin` on the cluster, and every group in
+  `entra_reader_group_object_ids` is assigned `Azure Kubernetes Service RBAC Reader`. The admin
+  groups carried in the cluster's Entra ID profile are **not** honored in this mode - Azure reports
+  `"adminGroupObjectIds": null` for such a cluster - so nothing is sent there.
+- **With Kubernetes RBAC**, `entra_admin_group_object_ids` becomes exactly those admin groups, bound
+  to `cluster-admin` inside the cluster, and no role assignment is made.
+  `entra_reader_group_object_ids` has no counterpart at all in this mode: those groups are granted
+  nothing, and Terraform says so on every plan. Bind them with a Kubernetes `ClusterRoleBinding`
+  instead, or turn Azure RBAC on.
+
+AKS Automatic is preconfigured with Azure RBAC and cannot be moved off it, so `azure_rbac_enabled`
+is ignored for that SKU: the cluster is authorized that way regardless, and a plan that asks for
+anything else says so.
+
+Anything narrower than those two roles is assigned by hand: `Azure Kubernetes Service RBAC Admin`
+and `... RBAC Writer` exist as well, and `... RBAC Reader` and `... RBAC Writer` can be scoped to a
+single namespace with `--scope $AKS_ID/namespaces/<namespace>`. With
+`create_role_assignments = false` none of these grants are made here at all, and every one of them
+has to come from wherever the role assignments of the estate are managed.
 
 Because the cluster is private, the kubeconfig only resolves from inside the virtual network or from
 a network that reaches it - and for a cluster that brings no network of its own, there is no such
@@ -124,6 +156,8 @@ control plane instead:
 az aks command invoke --resource-group <resource_group_name> \
   --name "$(terraform output -raw name)" --command "kubectl get nodes"
 ```
+
+[entraauthz]: https://learn.microsoft.com/azure/aks/manage-azure-rbac
 
 ## Upgrade window
 

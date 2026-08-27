@@ -657,5 +657,5 @@ variable "virtual_network_resource_group_name" {
 
 variable "cost_analysis_enabled" {
   type    = bool
-  default = true
+  default = false
 }

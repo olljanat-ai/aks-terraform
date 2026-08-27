@@ -139,9 +139,10 @@ resource "time_sleep" "role_assignment_propagation" {
 }
 
 module "aks" {
+  # FixMe: Waiting for https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster/pull/297
+  source = "git::https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster.git?ref=89d17765b535b03736993972675f40d3c31c8b34"
   # source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
   # version = "0.8.1"
-  source = "git::https://github.com/Azure/terraform-azurerm-avm-res-containerservice-managedcluster.git?ref=89d17765b535b03736993972675f40d3c31c8b34"
 
   location  = var.location
   name      = var.name

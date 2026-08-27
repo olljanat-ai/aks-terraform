@@ -40,7 +40,12 @@ azure_policy_enabled  = false
 private_cluster_enabled         = false
 api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 
-entra_admin_group_object_ids = []
+# Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
+# the cluster: `Azure Kubernetes Service RBAC Cluster Admin` for the admins, `... RBAC Reader` for
+# the readers. Members of both still need `Azure Kubernetes Service Cluster User Role` on the
+# cluster to download a kubeconfig at all, which is granted elsewhere.
+entra_admin_group_object_ids  = []
+entra_reader_group_object_ids = []
 
 default_node_pool = {
   vm_size            = "Standard_A2m_v2"

@@ -1233,9 +1233,18 @@ run "a_namespace_nobody_gave_figures_to_is_sent_no_quota" {
     condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota)
     error_message = "No quota was asked for, so none should be sent."
   }
+  # The pod security labels are always there - a namespace is held to the estate standard whether or
+  # not it says anything - so what is checked here is that nothing else came along with them.
   assert {
-    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.labels)
-    error_message = "No labels were asked for, so none should be sent."
+    condition = toset(keys(azapi_resource.managed_namespace["team-payments"].body.properties.labels)) == toset([
+      "pod-security.kubernetes.io/audit",
+      "pod-security.kubernetes.io/audit-version",
+      "pod-security.kubernetes.io/enforce",
+      "pod-security.kubernetes.io/enforce-version",
+      "pod-security.kubernetes.io/warn",
+      "pod-security.kubernetes.io/warn-version",
+    ])
+    error_message = "No labels were asked for, so only the pod security ones should be sent."
   }
   assert {
     condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.annotations)
@@ -1395,8 +1404,14 @@ run "namespace_labels_and_annotations_merge_with_the_defaults" {
 
   assert {
     condition = azapi_resource.managed_namespace["team-search"].body.properties.labels == tomap({
-      "cost-centre" = "platform"
-      "tier"        = "dedicated"
+      "cost-centre"                                = "platform"
+      "tier"                                       = "dedicated"
+      "pod-security.kubernetes.io/audit"           = "restricted"
+      "pod-security.kubernetes.io/audit-version"   = "latest"
+      "pod-security.kubernetes.io/enforce"         = "restricted"
+      "pod-security.kubernetes.io/enforce-version" = "latest"
+      "pod-security.kubernetes.io/warn"            = "restricted"
+      "pod-security.kubernetes.io/warn-version"    = "latest"
     })
     error_message = "A namespace should add to the default labels and win on the keys it repeats."
   }
@@ -1840,4 +1855,282 @@ run "the_same_principal_can_be_granted_in_more_than_one_namespace" {
     condition     = length(azurerm_role_assignment.managed_namespace) == 2
     error_message = "A principal granted in two namespaces should get one assignment in each."
   }
+}
+
+# ----------------------------------------------------------------------------------------------
+# Pod Security Standards
+# ----------------------------------------------------------------------------------------------
+
+# The labels the API server's Pod Security Admission controller reads. Nothing else is involved:
+# admission is built into the API server, so a labelled namespace is an enforced one.
+run "a_namespace_is_held_to_the_restricted_standard_by_default" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition = azapi_resource.managed_namespace["team-payments"].body.properties.labels == tomap({
+      "pod-security.kubernetes.io/audit"           = "restricted"
+      "pod-security.kubernetes.io/audit-version"   = "latest"
+      "pod-security.kubernetes.io/enforce"         = "restricted"
+      "pod-security.kubernetes.io/enforce-version" = "latest"
+      "pod-security.kubernetes.io/warn"            = "restricted"
+      "pod-security.kubernetes.io/warn-version"    = "latest"
+    })
+    error_message = "A namespace that says nothing should enforce, audit and warn at restricted."
+  }
+}
+
+# Relaxing enforce is the exception; audit and warn stay put, so the pods that break the standard
+# are still recorded and still warn whoever applies them.
+run "an_exception_relaxes_only_what_it_names" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      observability = {
+        pod_security = { enforce = "privileged" }
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.managed_namespace["observability"].body.properties.labels["pod-security.kubernetes.io/enforce"] == "privileged"
+    error_message = "A namespace that cannot meet the standard should be able to say so."
+  }
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace["observability"].body.properties.labels["pod-security.kubernetes.io/audit"] == "restricted",
+      azapi_resource.managed_namespace["observability"].body.properties.labels["pod-security.kubernetes.io/warn"] == "restricted",
+    ])
+    error_message = "An exception should stay visible: relaxing enforce must not drag audit and warn down with it."
+  }
+  assert {
+    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
+    error_message = "An exception that is still audited is not a silent one."
+  }
+}
+
+run "a_mode_set_to_none_leaves_its_label_off_entirely" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        pod_security = { warn = "none" }
+      }
+    }
+  }
+
+  assert {
+    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/warn"])
+    error_message = "A mode nobody wants should leave no label rather than an empty one."
+  }
+  assert {
+    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/warn-version"])
+    error_message = "The version label goes with the mode it belongs to."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/enforce"] == "restricted"
+    error_message = "Turning off the warning should leave enforcement alone."
+  }
+}
+
+# `latest` follows the cluster, so an upgrade can tighten the standard under a running workload.
+run "the_standard_can_be_pinned_to_a_kubernetes_version" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      pod_security = { version = "v1.31" }
+    }
+    managed_namespaces = {
+      team-payments = {}
+      team-search = {
+        pod_security = { version = "v1.30" }
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/enforce-version"] == "v1.31"
+    error_message = "A pinned estate-wide version should reach every namespace."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-search"].body.properties.labels["pod-security.kubernetes.io/enforce-version"] == "v1.30"
+    error_message = "A namespace should be able to hold a version of its own."
+  }
+}
+
+run "the_estate_wide_standard_can_be_lowered_for_a_whole_cluster" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      pod_security = { audit = "restricted", enforce = "baseline", warn = "baseline" }
+    }
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/enforce"] == "baseline",
+      azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/warn"] == "baseline",
+      azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/audit"] == "restricted",
+    ])
+    error_message = "One place should move the standard for the whole cluster."
+  }
+}
+
+# The labels sit alongside whatever else the namespace carries, rather than replacing it.
+run "pod_security_labels_join_the_labels_a_namespace_already_has" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      labels = { "cost-centre" = "platform" }
+    }
+    managed_namespaces = {
+      team-payments = {
+        labels = { "team" = "payments" }
+      }
+    }
+  }
+
+  assert {
+    condition = azapi_resource.managed_namespace["team-payments"].body.properties.labels == tomap({
+      "cost-centre"                                = "platform"
+      "team"                                       = "payments"
+      "pod-security.kubernetes.io/audit"           = "restricted"
+      "pod-security.kubernetes.io/audit-version"   = "latest"
+      "pod-security.kubernetes.io/enforce"         = "restricted"
+      "pod-security.kubernetes.io/enforce-version" = "latest"
+      "pod-security.kubernetes.io/warn"            = "restricted"
+      "pod-security.kubernetes.io/warn-version"    = "latest"
+    })
+    error_message = "The pod security labels should be added to the namespace labels, not replace them."
+  }
+}
+
+# An exception is fine. An exception nobody can see is what this warns about.
+run "warns_about_an_exception_that_is_neither_enforced_nor_recorded" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      observability = {
+        pod_security = { audit = "none", enforce = "privileged", warn = "none" }
+      }
+    }
+  }
+
+  expect_failures = [check.pod_security_exceptions_stay_on_the_record]
+}
+
+run "an_exception_recorded_by_warn_alone_is_not_warned_about" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      observability = {
+        pod_security = { audit = "none", enforce = "privileged" }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
+    error_message = "Either audit or warn at the estate standard is enough to keep an exception visible."
+  }
+}
+
+# Nothing was relaxed, so there is no exception to record - even with audit and warn turned off.
+run "a_namespace_at_the_estate_standard_needs_no_record_of_an_exception" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        pod_security = { audit = "none", warn = "none" }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
+    error_message = "A namespace that still enforces the estate standard has made no exception."
+  }
+}
+
+run "rejects_a_pod_security_level_kubernetes_does_not_have" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        pod_security = { enforce = "hardened" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_pod_security_version_that_is_not_one" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        pod_security = { version = "1.31" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+# One place decides the standard, so a hand-written label cannot contradict pod_security.
+run "rejects_a_pod_security_label_written_by_hand" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        labels = { "pod-security.kubernetes.io/enforce" = "privileged" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_pod_security_label_written_by_hand_in_the_defaults" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      labels = { "pod-security.kubernetes.io/enforce" = "privileged" }
+    }
+  }
+
+  expect_failures = [var.managed_namespace_defaults]
+}
+
+run "rejects_an_estate_wide_pod_security_level_kubernetes_does_not_have" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      pod_security = { enforce = "hardened" }
+    }
+  }
+
+  expect_failures = [var.managed_namespace_defaults]
 }

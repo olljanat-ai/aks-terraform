@@ -48,6 +48,10 @@ default_node_pool = {
 # namespace_user for a kubeconfig scoped to it, then reader, writer or admin for what they may do
 # inside it. Object IDs, not names.
 #
+# Every namespace is held to the restricted Pod Security Standard unless it says otherwise. A
+# workload that cannot meet it states the exception on its own namespace - pod_security = { enforce
+# = "privileged" } - which leaves audit and warn at restricted, so the exception stays on the record.
+#
 # managed_namespaces = {
 #   team-payments = {
 #     access = [

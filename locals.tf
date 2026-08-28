@@ -147,9 +147,72 @@ locals {
     for name, namespace in var.managed_namespaces : name => merge(var.managed_namespace_defaults.annotations, namespace.annotations)
   }
 
+  # The pod security labels come last, because they are decided by `pod_security` alone - `labels`
+  # is refused a `pod-security.kubernetes.io/*` key of its own, so nothing here is being overridden.
   managed_namespace_labels = {
-    for name, namespace in var.managed_namespaces : name => merge(var.managed_namespace_defaults.labels, namespace.labels)
+    for name, namespace in var.managed_namespaces : name => merge(
+      var.managed_namespace_defaults.labels,
+      namespace.labels,
+      local.managed_namespace_pod_security_labels[name],
+    )
   }
+
+  # The Pod Security Standard each namespace is held to, with the estate-wide default filled in
+  # wherever the namespace says nothing. Relaxing `enforce` for a workload that cannot meet the
+  # standard leaves `audit` and `warn` where they were, so the exception stays on the record.
+  managed_namespace_pod_security = {
+    for name, namespace in var.managed_namespaces : name => {
+      audit   = coalesce(namespace.pod_security.audit, var.managed_namespace_defaults.pod_security.audit)
+      enforce = coalesce(namespace.pod_security.enforce, var.managed_namespace_defaults.pod_security.enforce)
+      version = coalesce(namespace.pod_security.version, var.managed_namespace_defaults.pod_security.version)
+      warn    = coalesce(namespace.pod_security.warn, var.managed_namespace_defaults.pod_security.warn)
+    }
+  }
+
+  # ... as the labels the API server's Pod Security Admission controller reads. This is the whole of
+  # the mechanism: admission is built into the API server, there is nothing to install, and a mode
+  # set to `none` leaves its label off rather than being sent an empty one.
+  #
+  # The version label pins the standard to a Kubernetes release. `latest` follows the cluster, so an
+  # upgrade can tighten what a namespace enforces under a workload that was passing the day before.
+  managed_namespace_pod_security_labels = {
+    for name, pod_security in local.managed_namespace_pod_security : name => merge(
+      pod_security.audit == "none" ? {} : {
+        "pod-security.kubernetes.io/audit"         = pod_security.audit
+        "pod-security.kubernetes.io/audit-version" = pod_security.version
+      },
+      pod_security.enforce == "none" ? {} : {
+        "pod-security.kubernetes.io/enforce"         = pod_security.enforce
+        "pod-security.kubernetes.io/enforce-version" = pod_security.version
+      },
+      pod_security.warn == "none" ? {} : {
+        "pod-security.kubernetes.io/warn"         = pod_security.warn
+        "pod-security.kubernetes.io/warn-version" = pod_security.version
+      },
+    )
+  }
+
+  # How much each Pod Security Standard permits, so that "weaker than the estate default" is
+  # something that can be compared rather than guessed at. `none` sits below `privileged`: both
+  # permit everything, and `none` additionally leaves no label saying so.
+  pod_security_strictness = {
+    none       = -1
+    privileged = 0
+    baseline   = 1
+    restricted = 2
+  }
+
+  # Namespaces that relax what they enforce below the estate default and record nothing in its
+  # place - neither audit nor warn is left at the standard the estate expects, so the pods that
+  # break it are neither refused nor written down anywhere.
+  managed_namespaces_with_silent_pod_security_exceptions = [
+    for name, pod_security in local.managed_namespace_pod_security : name
+    if local.pod_security_strictness[pod_security.enforce] < local.pod_security_strictness[var.managed_namespace_defaults.pod_security.enforce]
+    && max(
+      local.pod_security_strictness[pod_security.audit],
+      local.pod_security_strictness[pod_security.warn],
+    ) < local.pod_security_strictness[var.managed_namespace_defaults.pod_security.enforce]
+  ]
 
   # The quota figures a namespace ends up with, in the shape the API takes and with the ones nobody
   # named left out entirely. An empty map means no quota at all, which is a different thing from a

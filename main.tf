@@ -411,6 +411,19 @@ check "managed_namespaces_have_something_enforcing_their_network_policies" {
   }
 }
 
+# An exception to the estate-wide Pod Security Standard is a normal thing to need - a monitoring
+# agent wants the host network, a build runner wants a privileged container - and stating it on the
+# namespace is how it is meant to be done. Turning off `audit` and `warn` along with `enforce` is
+# what this warns about: the namespace then runs whatever it likes, nothing is refused, and nothing
+# anywhere records that it happened. Leave one of the two at the estate standard and the exception
+# stays visible in the audit log without blocking the workload.
+check "pod_security_exceptions_stay_on_the_record" {
+  assert {
+    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
+    error_message = "${join(", ", local.managed_namespaces_with_silent_pod_security_exceptions)} of ${var.name} enforce${length(local.managed_namespaces_with_silent_pod_security_exceptions) == 1 ? "s" : ""} a weaker Pod Security Standard than managed_namespace_defaults.pod_security.enforce (${var.managed_namespace_defaults.pod_security.enforce}) and audit or warn nothing at that standard either, so a pod that breaks it is neither refused nor recorded. Leave pod_security.audit or pod_security.warn at \"${var.managed_namespace_defaults.pod_security.enforce}\" on those namespaces."
+  }
+}
+
 # The three data plane roles are Azure RBAC roles, and a cluster authorizing through Kubernetes RBAC
 # does not consult Azure role assignments at all: the grants are made, Azure reports them, and every
 # kubectl from those principals still comes back forbidden. `namespace_user` is unaffected - it is a

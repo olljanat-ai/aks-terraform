@@ -73,6 +73,10 @@ default_node_pool = {
 #
 # `access` grants a group, service principal or user its rights on that namespace alone.
 #
+# Every namespace is held to the restricted Pod Security Standard unless it says otherwise. A
+# workload that cannot meet it states the exception on its own namespace - pod_security = { enforce
+# = "privileged" } - which leaves audit and warn at restricted, so the exception stays on the record.
+#
 # managed_namespaces = {
 #   team-payments = {
 #     access = [

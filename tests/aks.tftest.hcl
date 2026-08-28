@@ -1566,3 +1566,278 @@ run "rejects_estate_wide_defaults_azure_does_not_have" {
 
   expect_failures = [var.managed_namespace_defaults]
 }
+
+# ----------------------------------------------------------------------------------------------
+# Namespace-scoped access
+# ----------------------------------------------------------------------------------------------
+
+run "a_namespace_grants_nothing_unless_it_is_asked_to" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.managed_namespace) == 0
+    error_message = "A namespace with no access listed should hand nobody anything."
+  }
+}
+
+# The grants land on the namespace resource, not on the cluster: that is what keeps a team out of
+# the namespace next door.
+run "namespace_access_is_scoped_to_the_namespace_it_was_listed_on" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "namespace_user", principal_id = "22222222-2222-2222-2222-222222222222" },
+          { role = "writer", principal_id = "22222222-2222-2222-2222-222222222222" },
+        ]
+      }
+      team-search = {
+        access = [
+          { role = "reader", principal_id = "33333333-3333-3333-3333-333333333333" },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition = toset(keys(azurerm_role_assignment.managed_namespace)) == toset([
+      "team-payments/namespace_user/22222222-2222-2222-2222-222222222222",
+      "team-payments/writer/22222222-2222-2222-2222-222222222222",
+      "team-search/reader/33333333-3333-3333-3333-333333333333",
+    ])
+    error_message = "A grant should be addressed by what it grants, so that reordering the list churns nothing."
+  }
+  # The namespace IDs are only known after the apply, so they are overridden here to pin down that a
+  # grant is scoped to its own namespace rather than to the cluster or to the namespace next door.
+  override_resource {
+    target          = azapi_resource.managed_namespace["team-search"]
+    override_during = plan
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test/managedNamespaces/team-search"
+    }
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.managed_namespace["team-search/reader/33333333-3333-3333-3333-333333333333"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test/managedNamespaces/team-search"
+    error_message = "A grant belongs to the namespace it was listed on, not to the cluster."
+  }
+  assert {
+    condition = alltrue([
+      azurerm_role_assignment.managed_namespace["team-payments/namespace_user/22222222-2222-2222-2222-222222222222"].role_definition_name == "Azure Kubernetes Service Namespace User",
+      azurerm_role_assignment.managed_namespace["team-payments/writer/22222222-2222-2222-2222-222222222222"].role_definition_name == "Azure Kubernetes Service RBAC Writer",
+      azurerm_role_assignment.managed_namespace["team-search/reader/33333333-3333-3333-3333-333333333333"].role_definition_name == "Azure Kubernetes Service RBAC Reader",
+    ])
+    error_message = "Each short role name should reach Azure as the built-in role it stands for."
+  }
+}
+
+run "the_admin_role_is_the_namespace_one_and_not_the_cluster_one" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "admin", principal_id = "22222222-2222-2222-2222-222222222222" },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.managed_namespace["team-payments/admin/22222222-2222-2222-2222-222222222222"].role_definition_name == "Azure Kubernetes Service RBAC Admin"
+    error_message = "A namespace admin should not be handed cluster admin by accident."
+  }
+}
+
+# A group is the usual case, but a pipeline is a service principal and Azure has to be told which is
+# which rather than being left to look the principal up.
+run "a_service_principal_is_granted_as_one" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "writer", principal_id = "22222222-2222-2222-2222-222222222222" },
+          { role = "writer", principal_id = "44444444-4444-4444-4444-444444444444", principal_type = "ServicePrincipal" },
+          { role = "reader", principal_id = "55555555-5555-5555-5555-555555555555", principal_type = "User" },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.managed_namespace["team-payments/writer/22222222-2222-2222-2222-222222222222"].principal_type == "Group"
+    error_message = "A grant that says nothing about the principal should be a group."
+  }
+  assert {
+    condition     = azurerm_role_assignment.managed_namespace["team-payments/writer/44444444-4444-4444-4444-444444444444"].principal_type == "ServicePrincipal"
+    error_message = "A service principal should be granted as a service principal."
+  }
+  assert {
+    condition     = azurerm_role_assignment.managed_namespace["team-payments/reader/55555555-5555-5555-5555-555555555555"].principal_type == "User"
+    error_message = "A user should be granted as a user."
+  }
+}
+
+run "namespace_access_is_left_to_someone_else_when_assignments_are" {
+  command = plan
+
+  variables {
+    create_role_assignments = false
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "writer", principal_id = "22222222-2222-2222-2222-222222222222" },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.managed_namespace) == 0
+    error_message = "An estate with role assignments managed elsewhere should get these from there too."
+  }
+
+  expect_failures = [check.namespace_access_is_granted_somewhere]
+}
+
+# The data plane roles are Azure RBAC roles; a cluster on Kubernetes RBAC never consults them.
+run "warns_about_namespace_data_plane_roles_without_azure_rbac" {
+  command = plan
+
+  variables {
+    azure_rbac_enabled = false
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "writer", principal_id = "22222222-2222-2222-2222-222222222222" },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [check.namespace_access_needs_azure_rbac]
+}
+
+# namespace_user is a control plane role on the Azure resource, so it works either way.
+run "a_namespace_user_grant_needs_no_azure_rbac" {
+  command = plan
+
+  variables {
+    azure_rbac_enabled = false
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "namespace_user", principal_id = "22222222-2222-2222-2222-222222222222" },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition     = length(local.managed_namespace_data_plane_grants) == 0
+    error_message = "namespace_user is granted on the Azure resource, not through Kubernetes authorization."
+  }
+  assert {
+    condition     = length(azurerm_role_assignment.managed_namespace) == 1
+    error_message = "The grant should still be made."
+  }
+}
+
+run "rejects_a_namespace_role_azure_does_not_have" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "cluster_admin", principal_id = "22222222-2222-2222-2222-222222222222" },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_namespace_grant_to_a_principal_type_azure_does_not_have" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "writer", principal_id = "22222222-2222-2222-2222-222222222222", principal_type = "ManagedIdentity" },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_namespace_grant_named_after_a_group_instead_of_its_object_id" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "writer", principal_id = "aks-payments-writers" },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+# Two identical grants would collide on the address they are keyed by, which Terraform reports as
+# something rather harder to read than this.
+run "rejects_the_same_grant_listed_twice_in_one_namespace" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [
+          { role = "writer", principal_id = "22222222-2222-2222-2222-222222222222" },
+          { role = "writer", principal_id = "22222222-2222-2222-2222-222222222222", principal_type = "Group" },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+# The same principal in two namespaces is two grants, not a collision.
+run "the_same_principal_can_be_granted_in_more_than_one_namespace" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        access = [{ role = "writer", principal_id = "22222222-2222-2222-2222-222222222222" }]
+      }
+      team-search = {
+        access = [{ role = "writer", principal_id = "22222222-2222-2222-2222-222222222222" }]
+      }
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.managed_namespace) == 2
+    error_message = "A principal granted in two namespaces should get one assignment in each."
+  }
+}

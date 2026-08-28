@@ -165,6 +165,49 @@ locals {
     }
   }
 
+  # Azure role names behind the short forms `managed_namespaces[*].access` uses. Only the roles that
+  # mean something at the scope of a single namespace are here: `Azure Kubernetes Service Namespace
+  # Contributor` creates and deletes managed namespaces on a cluster, which is what Terraform does,
+  # and the cluster-wide roles belong to entra_admin_group_object_ids.
+  managed_namespace_role_definition_names = {
+    admin          = "Azure Kubernetes Service RBAC Admin"
+    namespace_user = "Azure Kubernetes Service Namespace User"
+    reader         = "Azure Kubernetes Service RBAC Reader"
+    writer         = "Azure Kubernetes Service RBAC Writer"
+  }
+
+  # The roles the Kubernetes API enforces through Azure RBAC, and which therefore grant nothing at
+  # all on a cluster authorizing through Kubernetes RBAC. `namespace_user` is not one of them: it is
+  # a control plane role on the Azure resource, and works whichever mode the cluster runs in.
+  managed_namespace_data_plane_roles = ["admin", "reader", "writer"]
+
+  # Every grant asked for, keyed by what it grants rather than by its position in the list: an entry
+  # removed from the middle of `access` must not renumber the assignments after it and have Azure
+  # drop and recreate them.
+  managed_namespace_access_grants = {
+    for grant in flatten([
+      for name, namespace in var.managed_namespaces : [
+        for access in namespace.access : {
+          key            = "${name}/${access.role}/${access.principal_id}"
+          namespace      = name
+          principal_id   = access.principal_id
+          principal_type = access.principal_type
+          role           = access.role
+        }
+      ]
+    ]) : grant.key => grant
+  }
+
+  # ... and the ones made here. An estate with role assignments managed elsewhere gets these from
+  # there too, like every other assignment in this configuration.
+  managed_namespace_role_assignments = var.create_role_assignments ? local.managed_namespace_access_grants : {}
+
+  # Grants that need Azure RBAC to mean anything, for the check that says so.
+  managed_namespace_data_plane_grants = [
+    for key, grant in local.managed_namespace_access_grants : key
+    if contains(local.managed_namespace_data_plane_roles, grant.role)
+  ]
+
   # Namespaces whose default policies actually restrict something, which is what needs a network
   # policy engine in the cluster to be worth anything. A namespace left wide open in both
   # directions is unaffected by whether one is running.

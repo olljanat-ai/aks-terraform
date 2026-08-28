@@ -522,6 +522,11 @@ DESCRIPTION
 
 variable "managed_namespaces" {
   type = map(object({
+    access = optional(list(object({
+      principal_id   = string
+      principal_type = optional(string, "Group")
+      role           = string
+    })), [])
     adoption_policy = optional(string)
     annotations     = optional(map(string), {})
     delete_policy   = optional(string)
@@ -570,6 +575,47 @@ managed_namespaces = {
 a namespace adds to the estate-wide set rather than replacing it. Everything else is a plain
 override of the default.
 
+`access` grants Entra ID groups, service principals and users their rights on that namespace alone,
+as Azure role assignments scoped to it - no cluster-wide grant, and nothing to reach in the
+namespace next door:
+
+```hcl
+managed_namespaces = {
+  team-payments = {
+    access = [
+      # The team: a kubeconfig for this namespace, and read/write inside it.
+      { role = "namespace_user", principal_id = "00000000-0000-0000-0000-000000000000" },
+      { role = "writer", principal_id = "00000000-0000-0000-0000-000000000000" },
+      # Their deployment pipeline.
+      { role = "writer", principal_id = "11111111-1111-1111-1111-111111111111", principal_type = "ServicePrincipal" },
+    ]
+  }
+}
+```
+
+- `principal_id` - Object ID of the Entra ID group, service principal or user. For an application
+  this is the object ID of its **service principal** in the tenant, not the application ID.
+- `principal_type` - `Group` (the default), `ServicePrincipal` or `User`. Stated rather than looked
+  up, so that a principal created moments ago and not yet replicated does not fail the assignment.
+- `role` - One of:
+  - `namespace_user` - `Azure Kubernetes Service Namespace User`. Read-only on the namespace
+    resource, and the right to list credentials for it: this is what lets somebody run
+    `az aks namespace get-credentials` and get a kubeconfig for this namespace and nothing else.
+    Without it a principal has whatever the data plane roles below grant and no way to reach the
+    cluster at all.
+  - `reader` - `Azure Kubernetes Service RBAC Reader`. Reads most objects in the namespace, but not
+    `Secrets` - reading those is a way to act as any service account in it - and not roles or role
+    bindings.
+  - `writer` - `Azure Kubernetes Service RBAC Writer`. Reads and writes most objects, `Secrets`
+    included, and can run pods as any service account in the namespace.
+  - `admin` - `Azure Kubernetes Service RBAC Admin`. `writer`, plus roles and role bindings inside
+    the namespace. Still cannot change the namespace itself or its quota - those come from here.
+
+The three data plane roles are enforced by Azure RBAC for Kubernetes authorization, so they grant
+nothing while `azure_rbac_enabled = false` and Terraform says so on every plan. `namespace_user` is
+a control plane role and works either way. Nothing is granted at all while
+`create_role_assignments = false`.
+
 These are Azure resources rather than plain Kubernetes namespaces: AKS creates the namespace, the
 default `NetworkPolicy` and the default `ResourceQuota` in the cluster and reconciles them, and
 Azure RBAC can be scoped to the namespace. Removing an entry deletes the Azure resource; whether
@@ -593,6 +639,41 @@ DESCRIPTION
       !startswith(name, "kube-") && !contains(["app-routing-system", "gatekeeper-system", "istio-system"], name)
     ])
     error_message = "managed_namespaces names a system namespace. AKS does not allow one to be on-boarded as a managed namespace: not kube-system or anything else starting with \"kube-\", and not app-routing-system, gatekeeper-system or istio-system."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for access in namespace.access : contains(["admin", "namespace_user", "reader", "writer"], access.role)
+      ]
+    ]))
+    error_message = "managed_namespaces[*].access[*].role must be one of \"namespace_user\", \"reader\", \"writer\" or \"admin\"."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for access in namespace.access : contains(["Group", "ServicePrincipal", "User"], access.principal_type)
+      ]
+    ]))
+    error_message = "managed_namespaces[*].access[*].principal_type must be one of \"Group\", \"ServicePrincipal\" or \"User\"."
+  }
+  # An object ID, not a display name and not an application ID - Azure takes the principal as given
+  # rather than looking it up, so a name here becomes an assignment to nothing.
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for access in namespace.access : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", access.principal_id))
+      ]
+    ]))
+    error_message = "managed_namespaces[*].access[*].principal_id must be an Entra ID object ID, for example \"00000000-0000-0000-0000-000000000000\". For an application this is the object ID of its service principal, not the application ID."
+  }
+  # Each grant becomes one role assignment addressed by namespace, role and principal, and Azure
+  # refuses the same role twice on the same principal at the same scope anyway.
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      length(distinct([for access in namespace.access : "${access.role}/${access.principal_id}"])) == length(namespace.access)
+    ])
+    error_message = "managed_namespaces[*].access lists the same role for the same principal twice in one namespace. State each grant once."
   }
   validation {
     condition = alltrue([

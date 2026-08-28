@@ -62,7 +62,14 @@ default_node_pool = {
 # Terraform warns on every plan while that is the case. Set network_policy = "cilium" together with
 # network_dataplane = "cilium" above before relying on the boundary.
 #
+# `access` grants a group, service principal or user its rights on that namespace alone.
+#
 # managed_namespaces = {
-#   team-payments = {}
-#   team-search   = {}
+#   team-payments = {
+#     access = [
+#       { role = "namespace_user", principal_id = "00000000-0000-0000-0000-000000000000" },
+#       { role = "writer", principal_id = "00000000-0000-0000-0000-000000000000" },
+#     ]
+#   }
+#   team-search = {}
 # }

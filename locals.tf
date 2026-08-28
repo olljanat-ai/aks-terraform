@@ -124,9 +124,10 @@ locals {
   # wherever the namespace itself says nothing. Labels and annotations merge key by key, so a
   # namespace adds to the default set instead of replacing it; everything else is a plain override.
   #
-  # The optional parts are merged in rather than sent as null, because AzAPI only tracks what the
-  # body declares: a key written out as null is sent as null and then differs from what Azure
-  # answers with, which turns up as an update in every later plan.
+  # The optional parts - the labels and annotations - are merged in rather than sent as null, because
+  # AzAPI only tracks what the body declares: a key written out as null is sent as null and then
+  # differs from what Azure answers with, which turns up as an update in every later plan. The quota
+  # is not among them: Azure requires one on every managed namespace, so every namespace sends one.
   managed_namespace_properties = {
     for name, namespace in var.managed_namespaces : name => merge(
       {
@@ -135,11 +136,11 @@ locals {
           egress  = coalesce(namespace.network_policy.egress, var.managed_namespace_defaults.network_policy.egress)
           ingress = coalesce(namespace.network_policy.ingress, var.managed_namespace_defaults.network_policy.ingress)
         }
-        deletePolicy = coalesce(namespace.delete_policy, var.managed_namespace_defaults.delete_policy)
+        defaultResourceQuota = local.managed_namespace_resource_quotas[name]
+        deletePolicy         = coalesce(namespace.delete_policy, var.managed_namespace_defaults.delete_policy)
       },
       length(local.managed_namespace_annotations[name]) == 0 ? {} : { annotations = local.managed_namespace_annotations[name] },
       length(local.managed_namespace_labels[name]) == 0 ? {} : { labels = local.managed_namespace_labels[name] },
-      length(local.managed_namespace_resource_quotas[name]) == 0 ? {} : { defaultResourceQuota = local.managed_namespace_resource_quotas[name] },
     )
   }
 
@@ -249,17 +250,18 @@ locals {
     }
   }
 
-  # ... and the same figures as they were named, with the ones nobody named left out entirely. An
-  # empty map means no quota at all, which is a different thing from a quota whose every figure is
-  # unset: AKS applies the latter and limits nothing by it.
+  # ... and the same figures as they were named, before the CPU ones become milliCPU. Every
+  # namespace carries all four: Azure requires the quota on a managed namespace even though the API
+  # spec has it optional - a namespace sent without one is refused with "The managed namespace CPU
+  # request number is not valid" - and `az aks namespace add` asks for all four figures for the same
+  # reason. There is therefore no such thing here as a namespace without a quota; what a namespace
+  # does not name it takes from managed_namespace_defaults, which names all four.
   managed_namespace_resource_quota_inputs = {
     for name, namespace in var.managed_namespaces : name => {
-      for field, quantity in {
-        cpuLimit      = namespace.resource_quota.cpu_limit != null ? namespace.resource_quota.cpu_limit : var.managed_namespace_defaults.resource_quota.cpu_limit
-        cpuRequest    = namespace.resource_quota.cpu_request != null ? namespace.resource_quota.cpu_request : var.managed_namespace_defaults.resource_quota.cpu_request
-        memoryLimit   = namespace.resource_quota.memory_limit != null ? namespace.resource_quota.memory_limit : var.managed_namespace_defaults.resource_quota.memory_limit
-        memoryRequest = namespace.resource_quota.memory_request != null ? namespace.resource_quota.memory_request : var.managed_namespace_defaults.resource_quota.memory_request
-      } : field => quantity if quantity != null
+      cpuLimit      = coalesce(namespace.resource_quota.cpu_limit, var.managed_namespace_defaults.resource_quota.cpu_limit)
+      cpuRequest    = coalesce(namespace.resource_quota.cpu_request, var.managed_namespace_defaults.resource_quota.cpu_request)
+      memoryLimit   = coalesce(namespace.resource_quota.memory_limit, var.managed_namespace_defaults.resource_quota.memory_limit)
+      memoryRequest = coalesce(namespace.resource_quota.memory_request, var.managed_namespace_defaults.resource_quota.memory_request)
     }
   }
 

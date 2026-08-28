@@ -1218,9 +1218,10 @@ run "a_namespace_closes_ingress_to_itself_and_leaves_egress_open" {
   }
 }
 
-# A namespace that is not asked for a quota is sent none. An empty quota object is a different
-# thing - AKS would apply it - so the key has to be absent rather than null.
-run "a_namespace_nobody_gave_figures_to_is_sent_no_quota" {
+# What a namespace says nothing about is left out of the body rather than sent as null: AzAPI tracks
+# only the keys the body declares, and a key sent as null differs from whatever Azure answers with.
+# The quota is the exception - Azure requires one - and has a run of its own further down.
+run "a_namespace_nobody_gave_labels_to_is_sent_none" {
   command = plan
 
   variables {
@@ -1229,10 +1230,6 @@ run "a_namespace_nobody_gave_figures_to_is_sent_no_quota" {
     }
   }
 
-  assert {
-    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota)
-    error_message = "No quota was asked for, so none should be sent."
-  }
   # The pod security labels are always there - a namespace is held to the estate standard whether or
   # not it says anything - so what is checked here is that nothing else came along with them.
   assert {
@@ -1344,8 +1341,8 @@ run "the_estate_wide_defaults_move_every_namespace_that_says_nothing" {
     error_message = "The adoption and delete policies should follow the defaults as well."
   }
   assert {
-    condition     = keys(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota) == ["cpuLimit", "memoryLimit"]
-    error_message = "The default quota should reach every namespace, with the figures nobody named left out."
+    condition     = keys(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota) == ["cpuLimit", "cpuRequest", "memoryLimit", "memoryRequest"]
+    error_message = "The default quota should reach every namespace, all four figures of it."
   }
   assert {
     condition = alltrue([
@@ -1371,8 +1368,8 @@ run "a_namespace_takes_the_quota_figures_it_names_and_the_defaults_for_the_rest"
   }
 
   assert {
-    condition     = keys(azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota) == ["cpuLimit", "memoryLimit", "memoryRequest"]
-    error_message = "Neither side named a CPU request, so none should be sent."
+    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuRequest == "500m"
+    error_message = "Neither side named a CPU request, so the built-in default should fill it in - Azure takes no namespace without one."
   }
   assert {
     condition = alltrue([
@@ -1381,6 +1378,33 @@ run "a_namespace_takes_the_quota_figures_it_names_and_the_defaults_for_the_rest"
       azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.memoryRequest == "1Gi",
     ])
     error_message = "A namespace should override the figures it names and inherit the ones it does not."
+  }
+}
+
+# Azure requires the quota on a managed namespace even though the API spec marks it optional: a
+# namespace that arrives without one is refused with "The managed namespace CPU request number is
+# not valid". A namespace that names nothing at all still has to carry all four figures.
+run "a_namespace_that_names_no_quota_still_gets_a_whole_one" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition     = keys(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota) == ["cpuLimit", "cpuRequest", "memoryLimit", "memoryRequest"]
+    error_message = "A namespace with no quota of its own should still be sent all four figures."
+  }
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2000m",
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuRequest == "500m",
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.memoryRequest == "1Gi",
+    ])
+    error_message = "The built-in quota should be the documented one, with the CPU figures in milliCPU."
   }
 }
 
@@ -1397,6 +1421,7 @@ run "cpu_quota_figures_reach_azure_as_millicpu" {
       team-payments = {
         resource_quota = { cpu_limit = "2" }
       }
+      # Named in milliCPU on both sides, which is the form Azure takes.
       team-search = {
         resource_quota = { cpu_limit = "1500m", cpu_request = "0.125" }
       }

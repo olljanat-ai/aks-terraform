@@ -509,9 +509,12 @@ moved {
 # a ceiling: Kubernetes network policies are additive, so a policy applied inside the namespace can
 # only widen what these permit.
 #
-# Written with AzAPI for the same reason the upgrade windows are: the module has nothing for
-# namespaces, and AzAPI tracks only the properties the body declares - which is what lets a
-# namespace be sent no quota at all rather than an empty one.
+# Written with AzAPI rather than through the module's own namespace submodule for the same reason
+# the upgrade windows are: that submodule writes every property into the body, including the ones a
+# namespace does not set, while AzAPI tracks only what the body declares - so a namespace that sets
+# no labels or annotations sends none rather than sending null and differing from whatever Azure
+# answers with. The quota is not one of those: Azure requires it on every managed namespace, which
+# is why one is always sent - see managed_namespace_resource_quota_inputs.
 resource "azapi_resource" "managed_namespace" {
   for_each = local.managed_namespace_properties
 

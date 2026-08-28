@@ -38,3 +38,16 @@ default_node_pool = {
   enable_auto_scaling = false
   node_count          = 1
 }
+
+# Namespaces AKS creates and keeps. Listing the names is the whole of it: each one gets ingress from
+# its own namespace only and egress to anywhere, which managed_namespace_defaults can move for the
+# whole cluster and any entry below can override for itself. This cluster runs Cilium, so the
+# policies are actually enforced.
+#
+# managed_namespaces = {
+#   team-payments = {}
+#   team-search = {
+#     network_policy = { egress = "AllowSameNamespace" }
+#     resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
+#   }
+# }

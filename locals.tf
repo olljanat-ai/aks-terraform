@@ -214,10 +214,45 @@ locals {
     ) < local.pod_security_strictness[var.managed_namespace_defaults.pod_security.enforce]
   ]
 
-  # The quota figures a namespace ends up with, in the shape the API takes and with the ones nobody
-  # named left out entirely. An empty map means no quota at all, which is a different thing from a
-  # quota whose every figure is unset: AKS applies the latter and limits nothing by it.
+  # Every CPU figure the quotas name, in the milliCPU form Azure takes. AKS refuses a managed
+  # namespace that states CPU any other way - "The managed namespace CPU request number is not
+  # valid. CPU request of the managed namespace must be in milliCPU form" - where Kubernetes reads
+  # "2" and "2000m" as the same two cores. The variables keep both forms, so that a quota reads the
+  # way it would in a manifest, and the cores are turned into milliCPU here rather than by hand in
+  # every variables file.
+  #
+  # Worked out on the digits rather than by multiplying by a thousand: these are decimal fractions
+  # of a core, binary floating point holds none of them exactly, and 0.1 cores would come out either
+  # side of 100m. The fraction is padded out to the three digits a milliCPU figure has - "0.5" is
+  # 500m, not 5m - and reading the two halves back as one number drops the leading zeros with them.
+  managed_namespace_cpu_millicores = {
+    for quantity in local.managed_namespace_cpu_quantities : quantity => format("%dm", tonumber(
+      endswith(quantity, "m")
+      ? trimsuffix(quantity, "m")
+      : "${split(".", quantity)[0]}${substr("${try(split(".", quantity)[1], "")}000", 0, 3)}"
+    ))
+  }
+
+  # The distinct CPU figures there are to convert, whichever namespace or default they came from.
+  managed_namespace_cpu_quantities = toset(flatten([
+    for quota in local.managed_namespace_resource_quota_inputs : [
+      for field, quantity in quota : quantity if startswith(field, "cpu")
+    ]
+  ]))
+
+  # The quota figures a namespace ends up with, in the shape the API takes: the CPU ones as
+  # milliCPU, the memory ones as they were written, since Azure takes those in the Kubernetes forms.
   managed_namespace_resource_quotas = {
+    for name, quota in local.managed_namespace_resource_quota_inputs : name => {
+      for field, quantity in quota :
+      field => startswith(field, "cpu") ? local.managed_namespace_cpu_millicores[quantity] : quantity
+    }
+  }
+
+  # ... and the same figures as they were named, with the ones nobody named left out entirely. An
+  # empty map means no quota at all, which is a different thing from a quota whose every figure is
+  # unset: AKS applies the latter and limits nothing by it.
+  managed_namespace_resource_quota_inputs = {
     for name, namespace in var.managed_namespaces : name => {
       for field, quantity in {
         cpuLimit      = namespace.resource_quota.cpu_limit != null ? namespace.resource_quota.cpu_limit : var.managed_namespace_defaults.resource_quota.cpu_limit

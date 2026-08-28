@@ -494,8 +494,9 @@ whole cluster at once; change it on the namespace to move one.
   line from a variables file should not delete a running workload. `Delete` removes the namespace
   with it.
 - `resource_quota` - Default `ResourceQuota` for the namespace. CPU is in Kubernetes CPU units
-  (`"500m"`, `"2"`), memory in the power-of-two forms (`"512Mi"`, `"4Gi"`). Left unset there is no
-  quota at all, which is not the same as one that limits nothing.
+  (`"500m"`, `"0.5"`, `"2"`) and is sent to Azure as milliCPU, which is the only form it takes, so
+  nothing finer than a milliCPU can be asked for; memory is in the power-of-two forms (`"512Mi"`,
+  `"4Gi"`). Left unset there is no quota at all, which is not the same as one that limits nothing.
 
 The network policies are the *default* ones AKS puts in the namespace, not the only ones allowed in
 it: Kubernetes network policies are additive, so a policy applied inside the namespace can only
@@ -538,9 +539,12 @@ DESCRIPTION
   validation {
     condition = alltrue([
       for quantity in [var.managed_namespace_defaults.resource_quota.cpu_limit, var.managed_namespace_defaults.resource_quota.cpu_request] :
-      quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?m?$", quantity))
+      quantity == null || (
+        can(regex("^([0-9]+(\\.[0-9]{1,3})?|[0-9]+m)$", quantity))
+        && try(tonumber(trimsuffix(quantity, "m")) > 0, false)
+      )
     ])
-    error_message = "managed_namespace_defaults.resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities, for example \"500m\" or \"2\"."
+    error_message = "managed_namespace_defaults.resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities of at least 1 milliCPU, for example \"500m\", \"0.5\" or \"2\". Azure takes the figures in milliCPU, so nothing finer than a milliCPU can be asked for."
   }
   validation {
     condition = alltrue([
@@ -785,10 +789,13 @@ DESCRIPTION
     condition = alltrue(flatten([
       for namespace in values(var.managed_namespaces) : [
         for quantity in [namespace.resource_quota.cpu_limit, namespace.resource_quota.cpu_request] :
-        quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?m?$", quantity))
+        quantity == null || (
+          can(regex("^([0-9]+(\\.[0-9]{1,3})?|[0-9]+m)$", quantity))
+          && try(tonumber(trimsuffix(quantity, "m")) > 0, false)
+        )
       ]
     ]))
-    error_message = "managed_namespaces[*].resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities, for example \"500m\" or \"2\"."
+    error_message = "managed_namespaces[*].resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities of at least 1 milliCPU, for example \"500m\", \"0.5\" or \"2\". Azure takes the figures in milliCPU, so nothing finer than a milliCPU can be asked for."
   }
   validation {
     condition = alltrue(flatten([

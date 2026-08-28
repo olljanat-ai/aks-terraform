@@ -1349,10 +1349,10 @@ run "the_estate_wide_defaults_move_every_namespace_that_says_nothing" {
   }
   assert {
     condition = alltrue([
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2",
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2000m",
       azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
     ])
-    error_message = "The figures the defaults do name should reach the namespace unchanged."
+    error_message = "The figures the defaults do name should reach the namespace, the CPU one as milliCPU."
   }
 }
 
@@ -1376,11 +1376,46 @@ run "a_namespace_takes_the_quota_figures_it_names_and_the_defaults_for_the_rest"
   }
   assert {
     condition = alltrue([
-      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuLimit == "8",
+      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuLimit == "8000m",
       azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
       azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.memoryRequest == "1Gi",
     ])
     error_message = "A namespace should override the figures it names and inherit the ones it does not."
+  }
+}
+
+# Azure refuses a quota that states CPU in anything but milliCPU, while a manifest writes the same
+# figure either way. Whichever form the variables name it in, what leaves here is milliCPU.
+run "cpu_quota_figures_reach_azure_as_millicpu" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      resource_quota = { cpu_request = "0.5" }
+    }
+    managed_namespaces = {
+      team-payments = {
+        resource_quota = { cpu_limit = "2" }
+      }
+      team-search = {
+        resource_quota = { cpu_limit = "1500m", cpu_request = "0.125" }
+      }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2000m",
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuRequest == "500m",
+    ])
+    error_message = "Whole and fractional cores should be sent as the milliCPU figure they mean."
+  }
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuLimit == "1500m",
+      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuRequest == "125m",
+    ])
+    error_message = "A figure already written in milliCPU should be sent as it stands."
   }
 }
 
@@ -1568,6 +1603,34 @@ run "rejects_a_quota_that_is_not_a_kubernetes_quantity" {
   }
 
   expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_cpu_quota_azure_cannot_hold" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      # Finer than the milliCPU Azure counts in, which would otherwise be quietly rounded away.
+      team-payments = {
+        resource_quota = { cpu_limit = "0.0005" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_cpu_quota_of_nothing_at_all" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      # Azure takes nothing below 1m, and a quota of zero CPU is not what anybody meant by it.
+      resource_quota = { cpu_request = "0" }
+    }
+  }
+
+  expect_failures = [var.managed_namespace_defaults]
 }
 
 run "rejects_estate_wide_defaults_azure_does_not_have" {

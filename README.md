@@ -233,6 +233,10 @@ Both `ingress` and `egress` take `AllowAll`, `AllowSameNamespace` or `DenyAll`. 
 than replacing it; everything else is a plain override. A namespace that names no quota figures is
 sent no quota at all rather than an empty one.
 
+Quota figures are written the way a manifest writes them - `"500m"`, `"0.5"` or `"2"` for CPU,
+`"512Mi"` or `"4Gi"` for memory. Azure takes the CPU ones in milliCPU alone, so `"2"` is sent on as
+`"2000m"` and a figure finer than a milliCPU is refused rather than rounded away.
+
 ### Pod Security Standards
 
 Every managed namespace is held to the **`restricted`** [Pod Security Standard][pss] unless it says

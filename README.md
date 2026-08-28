@@ -187,6 +187,7 @@ assignments can be scoped to the namespace alone - see
 | `adoption_policy` | `Never` | A Kubernetes namespace of that name that already exists fails the apply instead of being taken over. |
 | `delete_policy` | `Keep` | Removing the entry deletes the Azure resource and leaves the Kubernetes namespace, and whatever runs in it, standing. |
 | `resource_quota` | none | No `ResourceQuota` at all, which is not the same as one that limits nothing. |
+| `pod_security` | `restricted` | The namespace is held to the hardened [Pod Security Standard][pss], enforced, audited and warned about - see [Pod Security Standards](#pod-security-standards). |
 
 **Closed inbound, open outbound** is the shape this settles on: a workload talks out to what it
 needs without anyone having to enumerate it, and nothing in another namespace talks in until it is
@@ -231,6 +232,70 @@ Both `ingress` and `egress` take `AllowAll`, `AllowSameNamespace` or `DenyAll`. 
 `annotations` merge with the defaults key by key, so a namespace adds to the estate-wide set rather
 than replacing it; everything else is a plain override. A namespace that names no quota figures is
 sent no quota at all rather than an empty one.
+
+### Pod Security Standards
+
+Every managed namespace is held to the **`restricted`** [Pod Security Standard][pss] unless it says
+otherwise. There is nothing to install: the standard is applied as the
+`pod-security.kubernetes.io/*` labels the API server's built-in [Pod Security Admission][psa]
+controller reads, so a labelled namespace is an enforced one.
+
+Each namespace gets all three modes at `restricted`:
+
+| Mode | What it does |
+| --- | --- |
+| `enforce` | Rejects a pod that breaks the standard. |
+| `audit` | Records the violation in the API server audit log and lets the pod through. |
+| `warn` | Returns a warning to whoever applied it and lets the pod through. |
+
+`restricted` is genuinely strict - it wants `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+`seccompProfile: RuntimeDefault` and all capabilities dropped - and plenty of off-the-shelf charts
+do not meet it as shipped. That is the point of it being the default: a workload that needs more has
+to say so, in the variables file, where it is reviewed.
+
+#### Exceptions
+
+An exception is stated on the namespace that needs it, not by lowering the standard for the cluster:
+
+```hcl
+managed_namespaces = {
+  # A monitoring agent that wants the host network and a privileged container.
+  observability = {
+    pod_security = { enforce = "privileged" }
+  }
+  # Charts that are not quite there yet, held at the middle standard while they catch up.
+  team-search = {
+    pod_security = { enforce = "baseline", warn = "baseline" }
+  }
+}
+```
+
+Each mode takes `restricted`, `baseline`, `privileged` - the level that permits everything, and so
+the normal way to write an exception - or `none`, which leaves that label off the namespace
+entirely.
+
+**Relaxing `enforce` on its own leaves `audit` and `warn` where they were.** The pods that break the
+standard still land in the audit log and still warn whoever applies them, so the exception is
+visible and can be walked back later. Terraform warns when a namespace relaxes `enforce` *and* turns
+off both of the other two: that is an exception nothing refuses and nothing records.
+
+`version` pins the standard to a Kubernetes release:
+
+```hcl
+managed_namespace_defaults = {
+  pod_security = { version = "v1.31" }
+}
+```
+
+The default, `latest`, follows the cluster - which means an AKS upgrade can tighten what a namespace
+enforces under a workload that was passing the day before. Pin it in an environment where that
+matters, and move the pin deliberately.
+
+The labels are set through `pod_security` alone; a `pod-security.kubernetes.io/*` key written into
+`labels` by hand is refused, so a namespace cannot end up with two answers about what it enforces.
+
+[psa]: https://kubernetes.io/docs/concepts/security/pod-security-admission/
+[pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/
 
 ### Who gets into a namespace
 
@@ -305,6 +370,11 @@ removing one entry does not renumber the assignments after it and have Azure dro
   cannot be on-boarded at all - `kube-system` and anything else starting with `kube-`,
   `gatekeeper-system`, `istio-system`, `app-routing-system` - and Terraform refuses the ones
   Microsoft names.
+- **The labels cannot be edited back out from inside the cluster.** Because the namespace is
+  managed, AKS blocks changes to its labels through the Kubernetes API - so `kubectl label namespace
+  team-search pod-security.kubernetes.io/enforce=privileged` does not work, and an exception has to
+  go through the variables file. That is the point, but it does mean a team cannot unblock itself at
+  three in the morning.
 - **A namespace grant does not carry over to the cluster.** `Azure Kubernetes Service Cluster User
   Role` and the cluster-wide `entra_admin_group_object_ids` are separate, and a principal that has
   only namespace grants cannot run `az aks get-credentials` or see anything outside its namespace -

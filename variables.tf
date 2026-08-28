@@ -450,6 +450,12 @@ variable "managed_namespace_defaults" {
       egress  = optional(string, "AllowAll")
       ingress = optional(string, "AllowSameNamespace")
     }), {})
+    pod_security = optional(object({
+      audit   = optional(string, "restricted")
+      enforce = optional(string, "restricted")
+      version = optional(string, "latest")
+      warn    = optional(string, "restricted")
+    }), {})
     resource_quota = optional(object({
       cpu_limit      = optional(string)
       cpu_request    = optional(string)
@@ -471,6 +477,14 @@ whole cluster at once; change it on the namespace to move one.
   cluster without further ado. `AllowSameNamespace` confines it to its own namespace and `DenyAll`
   cuts it off entirely - both of which take a deliberate look at what the workload actually talks
   to before they are turned on.
+- `pod_security` - The [Pod Security Standard][pss] the namespace is held to, applied as the
+  `pod-security.kubernetes.io/*` labels the API server's Pod Security Admission controller reads.
+  `enforce` rejects a pod that breaks the standard, `audit` records it in the audit log and `warn`
+  returns a warning to whoever applied it; all three default to `restricted`, the hardened standard.
+  Each takes `restricted`, `baseline`, `privileged` - the level that permits everything, and so the
+  way an exception is stated - or `none`, which leaves that label off entirely.
+  `version` pins the standard to a Kubernetes version, for example `"v1.31"`; the default `latest`
+  follows the cluster, which means an upgrade can tighten the standard under a running workload.
 - `adoption_policy` - What AKS does when a Kubernetes namespace of that name already exists.
   `Never` refuses and fails the apply, which is the default and what keeps this from taking over a
   namespace somebody else owns. `IfIdentical` adopts one whose labels and annotations already
@@ -486,6 +500,8 @@ whole cluster at once; change it on the namespace to move one.
 The network policies are the *default* ones AKS puts in the namespace, not the only ones allowed in
 it: Kubernetes network policies are additive, so a policy applied inside the namespace can only
 widen what these permit, never narrow it.
+
+[pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/
 DESCRIPTION
   nullable    = false
 
@@ -503,6 +519,21 @@ DESCRIPTION
       contains(["AllowAll", "AllowSameNamespace", "DenyAll"], rule)
     ])
     error_message = "managed_namespace_defaults.network_policy.egress and .ingress must each be one of \"AllowAll\", \"AllowSameNamespace\" or \"DenyAll\"."
+  }
+  validation {
+    condition = alltrue([
+      for level in [var.managed_namespace_defaults.pod_security.audit, var.managed_namespace_defaults.pod_security.enforce, var.managed_namespace_defaults.pod_security.warn] :
+      contains(["baseline", "none", "privileged", "restricted"], level)
+    ])
+    error_message = "managed_namespace_defaults.pod_security.audit, .enforce and .warn must each be one of \"restricted\", \"baseline\", \"privileged\" or \"none\"."
+  }
+  validation {
+    condition     = can(regex("^(latest|v[0-9]+\\.[0-9]+)$", var.managed_namespace_defaults.pod_security.version))
+    error_message = "managed_namespace_defaults.pod_security.version must be \"latest\" or a pinned Kubernetes minor version such as \"v1.31\"."
+  }
+  validation {
+    condition     = alltrue([for key in keys(var.managed_namespace_defaults.labels) : !startswith(key, "pod-security.kubernetes.io/")])
+    error_message = "managed_namespace_defaults.labels must not set a pod-security.kubernetes.io/* label. Use managed_namespace_defaults.pod_security, which is where the Pod Security Standard is decided."
   }
   validation {
     condition = alltrue([
@@ -534,6 +565,12 @@ variable "managed_namespaces" {
     network_policy = optional(object({
       egress  = optional(string)
       ingress = optional(string)
+    }), {})
+    pod_security = optional(object({
+      audit   = optional(string)
+      enforce = optional(string)
+      version = optional(string)
+      warn    = optional(string)
     }), {})
     resource_quota = optional(object({
       cpu_limit      = optional(string)
@@ -574,6 +611,26 @@ managed_namespaces = {
 `labels` and `annotations` are merged with the ones in `managed_namespace_defaults` key by key, so
 a namespace adds to the estate-wide set rather than replacing it. Everything else is a plain
 override of the default.
+
+`pod_security` is where an exception to the estate-wide Pod Security Standard is stated. Every
+namespace is held to `restricted` unless it says otherwise, and a workload that cannot meet it says
+so on the namespace rather than having the standard lowered for the cluster:
+
+```hcl
+managed_namespaces = {
+  # A monitoring agent that needs the host network and a privileged container.
+  observability = {
+    pod_security = { enforce = "privileged" }
+  }
+}
+```
+
+Relaxing `enforce` on its own leaves `audit` and `warn` where they were, so the pods that break the
+standard are still recorded in the audit log and still warn whoever applies them - the exception is
+visible rather than silent, and Terraform warns when an exception turns that off as well.
+
+`labels` must not carry `pod-security.kubernetes.io/*` keys of its own; `pod_security` is the one
+place those are set.
 
 `access` grants Entra ID groups, service principals and users their rights on that namespace alone,
 as Azure role assignments scoped to it - no cluster-wide grant, and nothing to reach in the
@@ -639,6 +696,32 @@ DESCRIPTION
       !startswith(name, "kube-") && !contains(["app-routing-system", "gatekeeper-system", "istio-system"], name)
     ])
     error_message = "managed_namespaces names a system namespace. AKS does not allow one to be on-boarded as a managed namespace: not kube-system or anything else starting with \"kube-\", and not app-routing-system, gatekeeper-system or istio-system."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for level in [namespace.pod_security.audit, namespace.pod_security.enforce, namespace.pod_security.warn] :
+        level == null || contains(["baseline", "none", "privileged", "restricted"], coalesce(level, ""))
+      ]
+    ]))
+    error_message = "managed_namespaces[*].pod_security.audit, .enforce and .warn must each be one of \"restricted\", \"baseline\", \"privileged\" or \"none\", or left unset to follow managed_namespace_defaults."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.pod_security.version == null || can(regex("^(latest|v[0-9]+\\.[0-9]+)$", namespace.pod_security.version))
+    ])
+    error_message = "managed_namespaces[*].pod_security.version must be \"latest\" or a pinned Kubernetes minor version such as \"v1.31\"."
+  }
+  # The pod security labels come from pod_security, so that there is one place they are decided and
+  # a namespace cannot end up with an enforce label that contradicts what it asked for.
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for key in keys(namespace.labels) : !startswith(key, "pod-security.kubernetes.io/")
+      ]
+    ]))
+    error_message = "managed_namespaces[*].labels must not set a pod-security.kubernetes.io/* label. Use pod_security, which is where the Pod Security Standard of a namespace is decided."
   }
   validation {
     condition = alltrue(flatten([

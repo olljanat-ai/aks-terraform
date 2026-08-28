@@ -457,10 +457,10 @@ variable "managed_namespace_defaults" {
       warn    = optional(string, "restricted")
     }), {})
     resource_quota = optional(object({
-      cpu_limit      = optional(string)
-      cpu_request    = optional(string)
-      memory_limit   = optional(string)
-      memory_request = optional(string)
+      cpu_limit      = optional(string, "2000m")
+      cpu_request    = optional(string, "500m")
+      memory_limit   = optional(string, "4Gi")
+      memory_request = optional(string, "1Gi")
     }), {})
   })
   default     = {}
@@ -493,10 +493,15 @@ whole cluster at once; change it on the namespace to move one.
   from here. `Keep` leaves it and whatever runs in it standing, which is the default: dropping a
   line from a variables file should not delete a running workload. `Delete` removes the namespace
   with it.
-- `resource_quota` - Default `ResourceQuota` for the namespace. CPU is in Kubernetes CPU units
-  (`"500m"`, `"0.5"`, `"2"`) and is sent to Azure as milliCPU, which is the only form it takes, so
-  nothing finer than a milliCPU can be asked for; memory is in the power-of-two forms (`"512Mi"`,
-  `"4Gi"`). Left unset there is no quota at all, which is not the same as one that limits nothing.
+- `resource_quota` - The `ResourceQuota` every namespace gets, defaulting to 2 cores and 4Gi of
+  limits against 500m and 1Gi of requests. Azure requires all four figures on a managed namespace -
+  the API spec has the quota optional, the service refuses a namespace without one - so this is a
+  ceiling to be raised or lowered rather than something that can be switched off. Its four figures
+  cap the *sum* of what the pods in the namespace request and are limited to, which also means a pod
+  that declares neither is refused; a `LimitRange` in the namespace is what gives those pods a
+  figure. CPU is in Kubernetes CPU units (`"500m"`, `"0.5"`, `"2"`) and is sent to Azure as
+  milliCPU, the only form it takes, so nothing finer than a milliCPU can be asked for; memory is in
+  the power-of-two forms (`"512Mi"`, `"4Gi"`).
 
 The network policies are the *default* ones AKS puts in the namespace, not the only ones allowed in
 it: Kubernetes network policies are additive, so a policy applied inside the namespace can only
@@ -615,6 +620,10 @@ managed_namespaces = {
 `labels` and `annotations` are merged with the ones in `managed_namespace_defaults` key by key, so
 a namespace adds to the estate-wide set rather than replacing it. Everything else is a plain
 override of the default.
+
+`resource_quota` raises or lowers the ceiling for one namespace. Azure requires every managed
+namespace to carry all four figures, so a namespace that names none of them gets the four in
+`managed_namespace_defaults` rather than no quota at all.
 
 `pod_security` is where an exception to the estate-wide Pod Security Standard is stated. Every
 namespace is held to `restricted` unless it says otherwise, and a workload that cannot meet it says

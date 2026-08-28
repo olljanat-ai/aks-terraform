@@ -186,7 +186,7 @@ assignments can be scoped to the namespace alone - see
 | `network_policy.egress` | `AllowAll` | A pod may reach the API server, DNS, the internet and the rest of the cluster. |
 | `adoption_policy` | `Never` | A Kubernetes namespace of that name that already exists fails the apply instead of being taken over. |
 | `delete_policy` | `Keep` | Removing the entry deletes the Azure resource and leaves the Kubernetes namespace, and whatever runs in it, standing. |
-| `resource_quota` | none | No `ResourceQuota` at all, which is not the same as one that limits nothing. |
+| `resource_quota` | 2 cores and 4Gi of limits, 500m and 1Gi of requests | Azure requires a quota on every managed namespace, so this is a ceiling to raise or lower rather than one to turn off. |
 | `pod_security` | `restricted` | The namespace is held to the hardened [Pod Security Standard][pss], enforced, audited and warned about - see [Pod Security Standards](#pod-security-standards). |
 
 **Closed inbound, open outbound** is the shape this settles on: a workload talks out to what it
@@ -231,11 +231,26 @@ managed_namespace_defaults = {
 Both `ingress` and `egress` take `AllowAll`, `AllowSameNamespace` or `DenyAll`. `labels` and
 `annotations` merge with the defaults key by key, so a namespace adds to the estate-wide set rather
 than replacing it; everything else is a plain override. A namespace that names no quota figures is
-sent no quota at all rather than an empty one.
+sent the four figures of `managed_namespace_defaults` rather than none at all.
 
 Quota figures are written the way a manifest writes them - `"500m"`, `"0.5"` or `"2"` for CPU,
 `"512Mi"` or `"4Gi"` for memory. Azure takes the CPU ones in milliCPU alone, so `"2"` is sent on as
 `"2000m"` and a figure finer than a milliCPU is refused rather than rounded away.
+
+**Every namespace has a quota.** Azure requires all four figures on a managed namespace - the API
+spec marks the quota optional and the service refuses a namespace that arrives without one - so
+`resource_quota` sets a ceiling rather than deciding whether there is one. The figures cap the sum
+of what the pods in the namespace request and are limited to, which also means a pod that declares
+neither a request nor a limit is refused by the quota; a `LimitRange` inside the namespace is what
+gives such pods their figures. A namespace that needs more room says so:
+
+```hcl
+managed_namespaces = {
+  team-search = {
+    resource_quota = { cpu_limit = "8", memory_limit = "16Gi" }
+  }
+}
+```
 
 ### Pod Security Standards
 

@@ -399,6 +399,18 @@ check "byo_private_dns_zone_has_an_identity_to_grant" {
   }
 }
 
+# A managed namespace that restricts ingress or egress writes a Kubernetes `NetworkPolicy`, and a
+# `NetworkPolicy` in a cluster with nothing to enforce it is an object nobody reads: the namespace
+# looks closed in Azure and every pod in the cluster can still reach into it. Terraform warns rather
+# than refuses, because a cluster can legitimately run its own policy engine - Cilium installed by
+# hand, say - which `network_profile.network_policy` knows nothing about.
+check "managed_namespaces_have_something_enforcing_their_network_policies" {
+  assert {
+    condition     = local.network_policy_engine_enabled || length(local.managed_namespaces_relying_on_network_policy) == 0
+    error_message = "${var.name} has network_profile.network_policy = \"none\", so nothing in it enforces a Kubernetes NetworkPolicy - and the restricted default policies of ${join(", ", local.managed_namespaces_relying_on_network_policy)} are written but never applied. Set network_profile.network_policy to \"cilium\", \"azure\" or \"calico\", or set network_policy = { egress = \"AllowAll\", ingress = \"AllowAll\" } on those namespaces to say that the boundary is drawn somewhere else."
+  }
+}
+
 # The upgrade windows. Azure fixes the three names: `default` covers the weekly AKS release of the
 # control plane and add-ons, `aksManagedAutoUpgradeSchedule` the Kubernetes version upgrade driven by
 # `upgrade_channel`, and `aksManagedNodeOSUpgradeSchedule` the node image patching driven by
@@ -451,4 +463,32 @@ moved {
 moved {
   from = module.aks.module.maintenanceconfiguration["default"].azapi_resource.this
   to   = azapi_resource.maintenance_configuration["default"]
+}
+
+# The namespaces AKS creates and keeps inside the cluster. A managed namespace is an Azure resource
+# rather than a `kubectl apply`: AKS reconciles the Kubernetes namespace, the default `NetworkPolicy`
+# and the default `ResourceQuota` from it, so a namespace survives being deleted by hand inside the
+# cluster and Azure RBAC can be scoped to it. That is why they are here rather than left to whatever
+# deploys workloads: the boundary a namespace draws is set up before anything lands in it.
+#
+# Every namespace closes ingress to its own namespace and leaves egress open unless it says
+# otherwise - see managed_namespace_defaults. These are the *default* policies of the namespace, not
+# a ceiling: Kubernetes network policies are additive, so a policy applied inside the namespace can
+# only widen what these permit.
+#
+# Written with AzAPI for the same reason the upgrade windows are: the module has nothing for
+# namespaces, and AzAPI tracks only the properties the body declares - which is what lets a
+# namespace be sent no quota at all rather than an empty one.
+resource "azapi_resource" "managed_namespace" {
+  for_each = local.managed_namespace_properties
+
+  location  = var.location
+  name      = each.key
+  parent_id = module.aks.resource_id
+  type      = "Microsoft.ContainerService/managedClusters/managedNamespaces@${local.aks_api_version}"
+  body = {
+    properties = each.value
+  }
+  # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates it.
+  schema_validation_enabled = false
 }

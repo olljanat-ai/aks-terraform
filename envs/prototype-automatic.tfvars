@@ -65,3 +65,13 @@ default_node_pool = {
   node_count          = 1
 }
 */
+
+# Namespaces AKS creates and keeps. Listing the names is the whole of it: each one gets ingress from
+# its own namespace only and egress to anywhere, which managed_namespace_defaults can move for the
+# whole cluster and any entry below can override for itself. An Automatic cluster always runs
+# Cilium, so the policies are enforced whatever network_profile says.
+#
+# managed_namespaces = {
+#   team-payments = {}
+#   team-search   = {}
+# }

@@ -440,6 +440,203 @@ DESCRIPTION
   }
 }
 
+variable "managed_namespace_defaults" {
+  type = object({
+    adoption_policy = optional(string, "Never")
+    annotations     = optional(map(string), {})
+    delete_policy   = optional(string, "Keep")
+    labels          = optional(map(string), {})
+    network_policy = optional(object({
+      egress  = optional(string, "AllowAll")
+      ingress = optional(string, "AllowSameNamespace")
+    }), {})
+    resource_quota = optional(object({
+      cpu_limit      = optional(string)
+      cpu_request    = optional(string)
+      memory_limit   = optional(string)
+      memory_request = optional(string)
+    }), {})
+  })
+  default     = {}
+  description = <<DESCRIPTION
+What every entry in `managed_namespaces` gets unless it says otherwise. Change it here to move a
+whole cluster at once; change it on the namespace to move one.
+
+- `network_policy.ingress` - Who may open a connection to a pod in the namespace. Defaults to
+  `AllowSameNamespace`: only pods of the same namespace, which is what makes a namespace a boundary
+  rather than a label. `AllowAll` lets any pod in the cluster in, `DenyAll` nothing at all - not
+  even the namespace itself.
+- `network_policy.egress` - Where a pod in the namespace may open a connection to. Defaults to
+  `AllowAll`, so that a workload reaches the API server, DNS, the internet and the rest of the
+  cluster without further ado. `AllowSameNamespace` confines it to its own namespace and `DenyAll`
+  cuts it off entirely - both of which take a deliberate look at what the workload actually talks
+  to before they are turned on.
+- `adoption_policy` - What AKS does when a Kubernetes namespace of that name already exists.
+  `Never` refuses and fails the apply, which is the default and what keeps this from taking over a
+  namespace somebody else owns. `IfIdentical` adopts one whose labels and annotations already
+  match, `Always` adopts and overwrites.
+- `delete_policy` - What happens to the Kubernetes namespace when the managed namespace is removed
+  from here. `Keep` leaves it and whatever runs in it standing, which is the default: dropping a
+  line from a variables file should not delete a running workload. `Delete` removes the namespace
+  with it.
+- `resource_quota` - Default `ResourceQuota` for the namespace. CPU is in Kubernetes CPU units
+  (`"500m"`, `"2"`), memory in the power-of-two forms (`"512Mi"`, `"4Gi"`). Left unset there is no
+  quota at all, which is not the same as one that limits nothing.
+
+The network policies are the *default* ones AKS puts in the namespace, not the only ones allowed in
+it: Kubernetes network policies are additive, so a policy applied inside the namespace can only
+widen what these permit, never narrow it.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = contains(["Always", "IfIdentical", "Never"], var.managed_namespace_defaults.adoption_policy)
+    error_message = "managed_namespace_defaults.adoption_policy must be one of \"Always\", \"IfIdentical\" or \"Never\"."
+  }
+  validation {
+    condition     = contains(["Delete", "Keep"], var.managed_namespace_defaults.delete_policy)
+    error_message = "managed_namespace_defaults.delete_policy must be either \"Delete\" or \"Keep\"."
+  }
+  validation {
+    condition = alltrue([
+      for rule in [var.managed_namespace_defaults.network_policy.egress, var.managed_namespace_defaults.network_policy.ingress] :
+      contains(["AllowAll", "AllowSameNamespace", "DenyAll"], rule)
+    ])
+    error_message = "managed_namespace_defaults.network_policy.egress and .ingress must each be one of \"AllowAll\", \"AllowSameNamespace\" or \"DenyAll\"."
+  }
+  validation {
+    condition = alltrue([
+      for quantity in [var.managed_namespace_defaults.resource_quota.cpu_limit, var.managed_namespace_defaults.resource_quota.cpu_request] :
+      quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?m?$", quantity))
+    ])
+    error_message = "managed_namespace_defaults.resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities, for example \"500m\" or \"2\"."
+  }
+  validation {
+    condition = alltrue([
+      for quantity in [var.managed_namespace_defaults.resource_quota.memory_limit, var.managed_namespace_defaults.resource_quota.memory_request] :
+      quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?$", quantity))
+    ])
+    error_message = "managed_namespace_defaults.resource_quota.memory_limit and .memory_request must be Kubernetes memory quantities, for example \"512Mi\" or \"4Gi\"."
+  }
+}
+
+variable "managed_namespaces" {
+  type = map(object({
+    adoption_policy = optional(string)
+    annotations     = optional(map(string), {})
+    delete_policy   = optional(string)
+    labels          = optional(map(string), {})
+    network_policy = optional(object({
+      egress  = optional(string)
+      ingress = optional(string)
+    }), {})
+    resource_quota = optional(object({
+      cpu_limit      = optional(string)
+      cpu_request    = optional(string)
+      memory_limit   = optional(string)
+      memory_request = optional(string)
+    }), {})
+  }))
+  default     = {}
+  description = <<DESCRIPTION
+Namespaces AKS creates and keeps inside the cluster, keyed by namespace name. Listing the names is
+the whole of it - everything a namespace needs comes from `managed_namespace_defaults`, so an
+environment that wants nothing special writes only this:
+
+```hcl
+managed_namespaces = {
+  team-payments = {}
+  team-search   = {}
+}
+```
+
+Each entry may then override any of the defaults for itself, and only what it names changes:
+
+```hcl
+managed_namespaces = {
+  # Reachable from the ingress controller in another namespace, so it opens ingress up.
+  team-payments = {
+    network_policy = { ingress = "AllowAll" }
+  }
+  # Batch jobs that must not reach anything outside their own namespace.
+  team-search = {
+    network_policy = { egress = "AllowSameNamespace" }
+    resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
+  }
+}
+```
+
+`labels` and `annotations` are merged with the ones in `managed_namespace_defaults` key by key, so
+a namespace adds to the estate-wide set rather than replacing it. Everything else is a plain
+override of the default.
+
+These are Azure resources rather than plain Kubernetes namespaces: AKS creates the namespace, the
+default `NetworkPolicy` and the default `ResourceQuota` in the cluster and reconciles them, and
+Azure RBAC can be scoped to the namespace. Removing an entry deletes the Azure resource; whether
+the Kubernetes namespace goes with it is `delete_policy`.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition = alltrue([
+      for name in keys(var.managed_namespaces) : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", name))
+    ])
+    error_message = "Every key of managed_namespaces must be a Kubernetes namespace name: 1 to 63 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit."
+  }
+  # Microsoft documents system namespaces as not on-boardable at all - `kube-system`,
+  # `gatekeeper-system`, `istio-system`, `app-routing-system` and the rest. The list is open-ended,
+  # so this catches the named ones and the `kube-` prefix Kubernetes reserves; anything else
+  # Microsoft adds to it is refused by Azure rather than here.
+  validation {
+    condition = alltrue([
+      for name in keys(var.managed_namespaces) :
+      !startswith(name, "kube-") && !contains(["app-routing-system", "gatekeeper-system", "istio-system"], name)
+    ])
+    error_message = "managed_namespaces names a system namespace. AKS does not allow one to be on-boarded as a managed namespace: not kube-system or anything else starting with \"kube-\", and not app-routing-system, gatekeeper-system or istio-system."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.adoption_policy == null || contains(["Always", "IfIdentical", "Never"], coalesce(namespace.adoption_policy, ""))
+    ])
+    error_message = "managed_namespaces[*].adoption_policy must be one of \"Always\", \"IfIdentical\" or \"Never\", or left unset to follow managed_namespace_defaults."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.delete_policy == null || contains(["Delete", "Keep"], coalesce(namespace.delete_policy, ""))
+    ])
+    error_message = "managed_namespaces[*].delete_policy must be either \"Delete\" or \"Keep\", or left unset to follow managed_namespace_defaults."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for rule in [namespace.network_policy.egress, namespace.network_policy.ingress] :
+        rule == null || contains(["AllowAll", "AllowSameNamespace", "DenyAll"], coalesce(rule, ""))
+      ]
+    ]))
+    error_message = "managed_namespaces[*].network_policy.egress and .ingress must each be one of \"AllowAll\", \"AllowSameNamespace\" or \"DenyAll\", or left unset to follow managed_namespace_defaults."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for quantity in [namespace.resource_quota.cpu_limit, namespace.resource_quota.cpu_request] :
+        quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?m?$", quantity))
+      ]
+    ]))
+    error_message = "managed_namespaces[*].resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities, for example \"500m\" or \"2\"."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.managed_namespaces) : [
+        for quantity in [namespace.resource_quota.memory_limit, namespace.resource_quota.memory_request] :
+        quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?$", quantity))
+      ]
+    ]))
+    error_message = "managed_namespaces[*].resource_quota.memory_limit and .memory_request must be Kubernetes memory quantities, for example \"512Mi\" or \"4Gi\"."
+  }
+}
+
 variable "network_profile" {
   type = object({
     network_plugin      = optional(string, "azure")

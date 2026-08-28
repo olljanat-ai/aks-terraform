@@ -17,7 +17,7 @@ left out: name none, and AKS creates and manages one for the cluster instead, wh
 
 | Path | Purpose |
 | --- | --- |
-| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, and wires up private or public API server access. |
+| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `envs/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
 | `envs/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades - the virtual network included, since this cluster brings none of its own. Runs on the Standard tier, which Automatic requires, and with a public API server. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -158,6 +158,101 @@ az aks command invoke --resource-group <resource_group_name> \
 ```
 
 [entraauthz]: https://learn.microsoft.com/azure/aks/manage-azure-rbac
+
+## Managed namespaces
+
+Namespaces are created by AKS rather than by whatever deploys workloads into them, so that the
+boundary a namespace draws is in place before anything lands in it. List the names in the variables
+file and there is nothing else to write:
+
+```hcl
+managed_namespaces = {
+  team-payments = {}
+  team-search   = {}
+}
+```
+
+Each one is a [managed namespace][namespaces]: an Azure resource that AKS reconciles into a
+Kubernetes `Namespace`, a default `NetworkPolicy` and - where one is asked for - a default
+`ResourceQuota`. Deleting the namespace inside the cluster does not get rid of it, and an Azure role
+assignment can be scoped to the namespace alone, which the `managed_namespace_ids` output exists
+for: `Azure Kubernetes Service Namespace User` on one of those IDs lets somebody pull a kubeconfig
+for that namespace and nothing else, and `... RBAC Writer` at the same scope lets them work in it.
+
+### What a namespace gets by default
+
+| | Default | What it means |
+| --- | --- | --- |
+| `network_policy.ingress` | `AllowSameNamespace` | Only pods of the same namespace can open a connection to a pod in it. |
+| `network_policy.egress` | `AllowAll` | A pod may reach the API server, DNS, the internet and the rest of the cluster. |
+| `adoption_policy` | `Never` | A Kubernetes namespace of that name that already exists fails the apply instead of being taken over. |
+| `delete_policy` | `Keep` | Removing the entry deletes the Azure resource and leaves the Kubernetes namespace, and whatever runs in it, standing. |
+| `resource_quota` | none | No `ResourceQuota` at all, which is not the same as one that limits nothing. |
+
+**Closed inbound, open outbound** is the shape this settles on: a workload talks out to what it
+needs without anyone having to enumerate it, and nothing in another namespace talks in until it is
+allowed to. It is the half of the pair that is worth having by default - the one that stops a
+compromised or merely misconfigured workload in one namespace from reaching straight into another -
+while a default-deny egress would break DNS, the API server and every outbound call on the first
+day and be turned off again by the afternoon.
+
+These are the namespace's *default* policies, not a ceiling. Kubernetes network policies are
+additive, so a `NetworkPolicy` applied inside the namespace can only widen what these permit -
+tightening egress for a particular workload is done by narrowing it here, not inside the cluster.
+
+### Changing them
+
+Anything in the table can be overridden on a single namespace:
+
+```hcl
+managed_namespaces = {
+  # Fronted by the ingress controller, which runs in another namespace.
+  team-payments = {
+    network_policy = { ingress = "AllowAll" }
+  }
+  # Batch jobs that have no business reaching anything outside their own namespace.
+  team-search = {
+    network_policy = { egress = "AllowSameNamespace" }
+    resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
+  }
+}
+```
+
+...or for the whole cluster at once through `managed_namespace_defaults`, which is what every
+namespace falls back to:
+
+```hcl
+managed_namespace_defaults = {
+  labels        = { "cost-centre" = "platform" }
+  delete_policy = "Delete"
+}
+```
+
+Both `ingress` and `egress` take `AllowAll`, `AllowSameNamespace` or `DenyAll`. `labels` and
+`annotations` merge with the defaults key by key, so a namespace adds to the estate-wide set rather
+than replacing it; everything else is a plain override. A namespace that names no quota figures is
+sent no quota at all rather than an empty one.
+
+### What to watch for
+
+- **Something has to enforce the policies.** A `NetworkPolicy` in a cluster with no policy engine is
+  an object nobody reads: the namespace looks closed in Azure and every pod in the cluster can still
+  reach into it. Terraform warns on every plan when `network_profile.network_policy = "none"` and a
+  namespace restricts anything - as `envs/prototype-prd-economy.tfvars` does. AKS Automatic always
+  runs Cilium and is never warned about.
+- **A managed namespace is no longer yours to edit from `kubectl`.** AKS installs a component that
+  reconciles the namespace against what Azure holds and blocks changes to the managed fields through
+  the Kubernetes API, so the variables file becomes the only way to change them.
+- **Names are Kubernetes namespace names**: lowercase letters, digits and hyphens. System namespaces
+  cannot be on-boarded at all - `kube-system` and anything else starting with `kube-`,
+  `gatekeeper-system`, `istio-system`, `app-routing-system` - and Terraform refuses the ones
+  Microsoft names.
+- **`delete_policy = "Keep"` leaves the namespace behind.** Removing an entry from the variables
+  file destroys the Azure resource but not the Kubernetes namespace, which is deliberate - a
+  workload should not disappear because a line moved. Clean it up with `kubectl delete namespace`,
+  or set `delete_policy = "Delete"` up front for namespaces that are meant to be disposable.
+
+[namespaces]: https://learn.microsoft.com/azure/aks/concepts-managed-namespaces
 
 ## Upgrade window
 

@@ -52,3 +52,17 @@ default_node_pool = {
   node_count         = 3
   availability_zones = ["1", "2", "3"]
 }
+
+# Namespaces AKS creates and keeps. Listing the names is the whole of it: each one gets ingress from
+# its own namespace only and egress to anywhere, which managed_namespace_defaults can move for the
+# whole cluster and any entry below can override for itself.
+#
+# NOTE: this cluster runs network_policy = "none", so nothing in it enforces a NetworkPolicy - a
+# namespace would look closed in Azure while every pod in the cluster could still reach into it.
+# Terraform warns on every plan while that is the case. Set network_policy = "cilium" together with
+# network_dataplane = "cilium" above before relying on the boundary.
+#
+# managed_namespaces = {
+#   team-payments = {}
+#   team-search   = {}
+# }

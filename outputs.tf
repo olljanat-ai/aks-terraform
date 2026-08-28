@@ -28,6 +28,14 @@ DESCRIPTION
   value       = try(module.aks.kubelet_identity.objectId, null)
 }
 
+output "managed_namespace_ids" {
+  description = <<DESCRIPTION
+Resource IDs of the managed namespaces, keyed by namespace name. Empty when the cluster has none.
+Scope an Azure role assignment to one of these to grant access to that namespace alone.
+DESCRIPTION
+  value       = { for name, namespace in azapi_resource.managed_namespace : name => namespace.id }
+}
+
 output "name" {
   description = "Name of the AKS cluster."
   value       = module.aks.name

@@ -1161,3 +1161,408 @@ run "rejects_automatic_on_the_free_tier" {
 
   expect_failures = [var.sku_tier]
 }
+
+# ----------------------------------------------------------------------------------------------
+# Managed namespaces
+# ----------------------------------------------------------------------------------------------
+
+run "a_cluster_with_no_managed_namespaces_creates_none" {
+  command = plan
+
+  assert {
+    condition     = length(azapi_resource.managed_namespace) == 0
+    error_message = "Namespaces are opt-in; an environment that lists none should get none."
+  }
+}
+
+# Listing the names is the whole of it: everything else comes from managed_namespace_defaults.
+run "a_namespace_closes_ingress_to_itself_and_leaves_egress_open" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {}
+      team-search   = {}
+    }
+  }
+
+  assert {
+    condition     = toset(keys(azapi_resource.managed_namespace)) == toset(["team-payments", "team-search"])
+    error_message = "Every name listed in managed_namespaces should get a namespace of its own."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].name == "team-payments"
+    error_message = "The namespace is named by the key, not by anything derived from it."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].parent_id == module.aks.resource_id
+    error_message = "A managed namespace belongs to the cluster."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].type == "Microsoft.ContainerService/managedClusters/managedNamespaces@2026-03-01"
+    error_message = "The namespace should use the same AKS API version as everything else written directly."
+  }
+  assert {
+    condition = alltrue([
+      for namespace in azapi_resource.managed_namespace :
+      namespace.body.properties.defaultNetworkPolicy.ingress == "AllowSameNamespace"
+    ])
+    error_message = "By default only pods of the same namespace should be able to reach into it."
+  }
+  assert {
+    condition = alltrue([
+      for namespace in azapi_resource.managed_namespace :
+      namespace.body.properties.defaultNetworkPolicy.egress == "AllowAll"
+    ])
+    error_message = "By default a workload should be able to reach out without further ado."
+  }
+}
+
+# A namespace that is not asked for a quota is sent none. An empty quota object is a different
+# thing - AKS would apply it - so the key has to be absent rather than null.
+run "a_namespace_nobody_gave_figures_to_is_sent_no_quota" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota)
+    error_message = "No quota was asked for, so none should be sent."
+  }
+  assert {
+    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.labels)
+    error_message = "No labels were asked for, so none should be sent."
+  }
+  assert {
+    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.annotations)
+    error_message = "No annotations were asked for, so none should be sent."
+  }
+}
+
+# Nothing is deleted or taken over behind anyone's back: an existing namespace of the same name
+# fails the apply, and dropping the entry again leaves the Kubernetes namespace standing.
+run "a_namespace_neither_adopts_nor_deletes_by_default" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.adoptionPolicy == "Never"
+    error_message = "A namespace that already exists should stop the apply rather than be taken over."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.deletePolicy == "Keep"
+    error_message = "Dropping a line from a variables file should not delete a running workload."
+  }
+}
+
+run "a_namespace_overrides_only_the_defaults_it_names" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        network_policy = { ingress = "AllowAll" }
+      }
+      team-search = {
+        network_policy = { egress = "AllowSameNamespace" }
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.ingress == "AllowAll"
+    error_message = "A namespace that opens ingress should get what it asked for."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.egress == "AllowAll"
+    error_message = "Overriding ingress should leave egress on the default."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.egress == "AllowSameNamespace"
+    error_message = "A namespace that confines egress should get what it asked for."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.ingress == "AllowSameNamespace"
+    error_message = "Overriding egress should leave ingress on the default."
+  }
+}
+
+# One place to move a whole cluster at once, rather than repeating the same override per namespace.
+run "the_estate_wide_defaults_move_every_namespace_that_says_nothing" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      adoption_policy = "IfIdentical"
+      delete_policy   = "Delete"
+      network_policy  = { egress = "DenyAll" }
+      resource_quota  = { cpu_limit = "2", memory_limit = "4Gi" }
+    }
+    managed_namespaces = {
+      team-payments = {}
+      team-search = {
+        network_policy = { egress = "AllowAll" }
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.egress == "DenyAll"
+    error_message = "A namespace that says nothing should follow the estate-wide default."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.egress == "AllowAll"
+    error_message = "A namespace that says otherwise should still win over the default."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.ingress == "AllowSameNamespace"
+    error_message = "Changing the default egress should leave the default ingress alone."
+  }
+  assert {
+    condition = alltrue([
+      for namespace in azapi_resource.managed_namespace :
+      namespace.body.properties.adoptionPolicy == "IfIdentical" && namespace.body.properties.deletePolicy == "Delete"
+    ])
+    error_message = "The adoption and delete policies should follow the defaults as well."
+  }
+  assert {
+    condition     = keys(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota) == ["cpuLimit", "memoryLimit"]
+    error_message = "The default quota should reach every namespace, with the figures nobody named left out."
+  }
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2",
+      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
+    ])
+    error_message = "The figures the defaults do name should reach the namespace unchanged."
+  }
+}
+
+run "a_namespace_takes_the_quota_figures_it_names_and_the_defaults_for_the_rest" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      resource_quota = { cpu_limit = "2", memory_limit = "4Gi" }
+    }
+    managed_namespaces = {
+      team-search = {
+        resource_quota = { cpu_limit = "8", memory_request = "1Gi" }
+      }
+    }
+  }
+
+  assert {
+    condition     = keys(azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota) == ["cpuLimit", "memoryLimit", "memoryRequest"]
+    error_message = "Neither side named a CPU request, so none should be sent."
+  }
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuLimit == "8",
+      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
+      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.memoryRequest == "1Gi",
+    ])
+    error_message = "A namespace should override the figures it names and inherit the ones it does not."
+  }
+}
+
+# Labels and annotations are added to rather than replaced, so an estate-wide set survives a
+# namespace adding one of its own.
+run "namespace_labels_and_annotations_merge_with_the_defaults" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      annotations = { "estate" = "prototype" }
+      labels      = { "cost-centre" = "platform", "tier" = "shared" }
+    }
+    managed_namespaces = {
+      team-search = {
+        annotations = { "owner" = "search" }
+        labels      = { "tier" = "dedicated" }
+      }
+    }
+  }
+
+  assert {
+    condition = azapi_resource.managed_namespace["team-search"].body.properties.labels == tomap({
+      "cost-centre" = "platform"
+      "tier"        = "dedicated"
+    })
+    error_message = "A namespace should add to the default labels and win on the keys it repeats."
+  }
+  assert {
+    condition = azapi_resource.managed_namespace["team-search"].body.properties.annotations == tomap({
+      "estate" = "prototype"
+      "owner"  = "search"
+    })
+    error_message = "Annotations should merge the same way the labels do."
+  }
+}
+
+# A NetworkPolicy in a cluster with nothing to enforce it is an object nobody reads: the namespace
+# looks closed in Azure and every pod in the cluster can still reach into it.
+run "warns_about_restricted_namespaces_with_no_network_policy_engine" {
+  command = plan
+
+  variables {
+    network_profile = {
+      network_policy    = "none"
+      network_dataplane = "azure"
+    }
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  expect_failures = [check.managed_namespaces_have_something_enforcing_their_network_policies]
+}
+
+run "a_namespace_open_in_both_directions_needs_no_engine_to_enforce_it" {
+  command = plan
+
+  variables {
+    network_profile = {
+      network_policy    = "none"
+      network_dataplane = "azure"
+    }
+    managed_namespaces = {
+      team-payments = {
+        network_policy = { egress = "AllowAll", ingress = "AllowAll" }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(local.managed_namespaces_relying_on_network_policy) == 0
+    error_message = "A namespace that restricts nothing has nothing for an engine to enforce."
+  }
+}
+
+# AKS Automatic runs Cilium whatever network_profile says, and is sent no network profile at all on
+# loadBalancer egress - so the warning must not fire on it.
+run "automatic_enforces_network_policies_whatever_the_profile_says" {
+  command = plan
+
+  variables {
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    api_server_subnet_name  = "snet-aks-apiserver"
+    system_node_subnet_name = "snet-aks-system"
+    network_profile = {
+      network_policy    = "none"
+      network_dataplane = "azure"
+      pod_cidr          = "100.201.0.0/16"
+      service_cidr      = "100.202.0.0/16"
+      dns_service_ip    = "100.202.0.10"
+      outbound_type     = "userDefinedRouting"
+    }
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition     = local.network_policy_engine_enabled
+    error_message = "An Automatic cluster always runs Cilium, so its namespaces are enforced."
+  }
+}
+
+run "rejects_a_namespace_name_kubernetes_reserves" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      kube-payments = {}
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_system_namespace_aks_will_not_hand_over" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      gatekeeper-system = {}
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_namespace_name_kubernetes_would_refuse" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      Team_Payments = {}
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_network_policy_rule_azure_does_not_have" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        network_policy = { ingress = "AllowSameCluster" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_delete_policy_azure_does_not_have" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        delete_policy = "Retain"
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_quota_that_is_not_a_kubernetes_quantity" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        resource_quota = { memory_limit = "4GB" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_estate_wide_defaults_azure_does_not_have" {
+  command = plan
+
+  variables {
+    managed_namespace_defaults = {
+      network_policy = { egress = "AllowSameCluster" }
+    }
+  }
+
+  expect_failures = [var.managed_namespace_defaults]
+}

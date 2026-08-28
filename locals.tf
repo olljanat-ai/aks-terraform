@@ -120,6 +120,64 @@ locals {
   ))
   name_segments = split("-", var.name)
 
+  # Every managed namespace as the request body AKS takes, with the estate-wide defaults filled in
+  # wherever the namespace itself says nothing. Labels and annotations merge key by key, so a
+  # namespace adds to the default set instead of replacing it; everything else is a plain override.
+  #
+  # The optional parts are merged in rather than sent as null, because AzAPI only tracks what the
+  # body declares: a key written out as null is sent as null and then differs from what Azure
+  # answers with, which turns up as an update in every later plan.
+  managed_namespace_properties = {
+    for name, namespace in var.managed_namespaces : name => merge(
+      {
+        adoptionPolicy = coalesce(namespace.adoption_policy, var.managed_namespace_defaults.adoption_policy)
+        defaultNetworkPolicy = {
+          egress  = coalesce(namespace.network_policy.egress, var.managed_namespace_defaults.network_policy.egress)
+          ingress = coalesce(namespace.network_policy.ingress, var.managed_namespace_defaults.network_policy.ingress)
+        }
+        deletePolicy = coalesce(namespace.delete_policy, var.managed_namespace_defaults.delete_policy)
+      },
+      length(local.managed_namespace_annotations[name]) == 0 ? {} : { annotations = local.managed_namespace_annotations[name] },
+      length(local.managed_namespace_labels[name]) == 0 ? {} : { labels = local.managed_namespace_labels[name] },
+      length(local.managed_namespace_resource_quotas[name]) == 0 ? {} : { defaultResourceQuota = local.managed_namespace_resource_quotas[name] },
+    )
+  }
+
+  managed_namespace_annotations = {
+    for name, namespace in var.managed_namespaces : name => merge(var.managed_namespace_defaults.annotations, namespace.annotations)
+  }
+
+  managed_namespace_labels = {
+    for name, namespace in var.managed_namespaces : name => merge(var.managed_namespace_defaults.labels, namespace.labels)
+  }
+
+  # The quota figures a namespace ends up with, in the shape the API takes and with the ones nobody
+  # named left out entirely. An empty map means no quota at all, which is a different thing from a
+  # quota whose every figure is unset: AKS applies the latter and limits nothing by it.
+  managed_namespace_resource_quotas = {
+    for name, namespace in var.managed_namespaces : name => {
+      for field, quantity in {
+        cpuLimit      = namespace.resource_quota.cpu_limit != null ? namespace.resource_quota.cpu_limit : var.managed_namespace_defaults.resource_quota.cpu_limit
+        cpuRequest    = namespace.resource_quota.cpu_request != null ? namespace.resource_quota.cpu_request : var.managed_namespace_defaults.resource_quota.cpu_request
+        memoryLimit   = namespace.resource_quota.memory_limit != null ? namespace.resource_quota.memory_limit : var.managed_namespace_defaults.resource_quota.memory_limit
+        memoryRequest = namespace.resource_quota.memory_request != null ? namespace.resource_quota.memory_request : var.managed_namespace_defaults.resource_quota.memory_request
+      } : field => quantity if quantity != null
+    }
+  }
+
+  # Namespaces whose default policies actually restrict something, which is what needs a network
+  # policy engine in the cluster to be worth anything. A namespace left wide open in both
+  # directions is unaffected by whether one is running.
+  managed_namespaces_relying_on_network_policy = [
+    for name, properties in local.managed_namespace_properties : name
+    if properties.defaultNetworkPolicy.egress != "AllowAll" || properties.defaultNetworkPolicy.ingress != "AllowAll"
+  ]
+
+  # Whether the cluster runs something that enforces Kubernetes network policies at all. AKS
+  # Automatic always runs Cilium, so it does regardless of what network_profile says - and the
+  # profile is not even sent for an Automatic cluster on loadBalancer egress.
+  network_policy_engine_enabled = local.is_automatic || var.network_profile.network_policy != "none"
+
   # Azure rejects a dnsPrefix when a custom private DNS zone is used and requires an fqdnSubdomain
   # instead. AKS Automatic derives both itself.
   fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)

@@ -71,7 +71,14 @@ default_node_pool = {
 # whole cluster and any entry below can override for itself. An Automatic cluster always runs
 # Cilium, so the policies are enforced whatever network_profile says.
 #
+# `access` grants a group, service principal or user its rights on that namespace alone.
+#
 # managed_namespaces = {
-#   team-payments = {}
-#   team-search   = {}
+#   team-payments = {
+#     access = [
+#       { role = "namespace_user", principal_id = "00000000-0000-0000-0000-000000000000" },
+#       { role = "writer", principal_id = "00000000-0000-0000-0000-000000000000" },
+#     ]
+#   }
+#   team-search = {}
 # }

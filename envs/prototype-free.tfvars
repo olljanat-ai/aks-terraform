@@ -44,8 +44,18 @@ default_node_pool = {
 # whole cluster and any entry below can override for itself. This cluster runs Cilium, so the
 # policies are actually enforced.
 #
+# `access` grants a group, service principal or user its rights on that namespace alone -
+# namespace_user for a kubeconfig scoped to it, then reader, writer or admin for what they may do
+# inside it. Object IDs, not names.
+#
 # managed_namespaces = {
-#   team-payments = {}
+#   team-payments = {
+#     access = [
+#       { role = "namespace_user", principal_id = "00000000-0000-0000-0000-000000000000" },
+#       { role = "writer", principal_id = "00000000-0000-0000-0000-000000000000" },
+#       { role = "writer", principal_id = "11111111-1111-1111-1111-111111111111", principal_type = "ServicePrincipal" },
+#     ]
+#   }
 #   team-search = {
 #     network_policy = { egress = "AllowSameNamespace" }
 #     resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }

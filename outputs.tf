@@ -31,7 +31,10 @@ DESCRIPTION
 output "managed_namespace_ids" {
   description = <<DESCRIPTION
 Resource IDs of the managed namespaces, keyed by namespace name. Empty when the cluster has none.
-Scope an Azure role assignment to one of these to grant access to that namespace alone.
+
+An Azure role assignment scoped to one of these grants access to that namespace alone.
+`managed_namespaces[*].access` makes those assignments here; this output is what an estate running
+`create_role_assignments = false` scopes them to instead.
 DESCRIPTION
   value       = { for name, namespace in azapi_resource.managed_namespace : name => namespace.id }
 }

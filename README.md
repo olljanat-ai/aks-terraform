@@ -174,10 +174,9 @@ managed_namespaces = {
 
 Each one is a [managed namespace][namespaces]: an Azure resource that AKS reconciles into a
 Kubernetes `Namespace`, a default `NetworkPolicy` and - where one is asked for - a default
-`ResourceQuota`. Deleting the namespace inside the cluster does not get rid of it, and an Azure role
-assignment can be scoped to the namespace alone, which the `managed_namespace_ids` output exists
-for: `Azure Kubernetes Service Namespace User` on one of those IDs lets somebody pull a kubeconfig
-for that namespace and nothing else, and `... RBAC Writer` at the same scope lets them work in it.
+`ResourceQuota`. Deleting the namespace inside the cluster does not get rid of it, and Azure role
+assignments can be scoped to the namespace alone - see
+[Who gets into a namespace](#who-gets-into-a-namespace).
 
 ### What a namespace gets by default
 
@@ -233,6 +232,65 @@ Both `ingress` and `egress` take `AllowAll`, `AllowSameNamespace` or `DenyAll`. 
 than replacing it; everything else is a plain override. A namespace that names no quota figures is
 sent no quota at all rather than an empty one.
 
+### Who gets into a namespace
+
+`access` grants Entra ID groups, service principals and users their rights on that one namespace, as
+Azure role assignments scoped to the namespace resource. A team listed here reaches its own
+namespace and has no way into the one next door, and needs no cluster-wide grant at all:
+
+```hcl
+managed_namespaces = {
+  team-payments = {
+    access = [
+      # The team: a kubeconfig for this namespace, and read/write inside it.
+      { role = "namespace_user", principal_id = "00000000-0000-0000-0000-000000000000" },
+      { role = "writer", principal_id = "00000000-0000-0000-0000-000000000000" },
+      # Their deployment pipeline.
+      { role = "writer", principal_id = "11111111-1111-1111-1111-111111111111", principal_type = "ServicePrincipal" },
+      # Support, who may look but not touch.
+      { role = "reader", principal_id = "22222222-2222-2222-2222-222222222222" },
+    ]
+  }
+}
+```
+
+`principal_id` is an Entra ID **object ID** - for an application, the object ID of its service
+principal rather than the application ID. `principal_type` is `Group` (the default),
+`ServicePrincipal` or `User`; it is stated rather than looked up, so that a principal created moments
+ago and not yet replicated does not fail the assignment.
+
+| `role` | Azure built-in role | What it allows |
+| --- | --- | --- |
+| `namespace_user` | `Azure Kubernetes Service Namespace User` | Read-only on the namespace resource, and the right to list credentials for it. |
+| `reader` | `Azure Kubernetes Service RBAC Reader` | Reads most objects in the namespace, but not `Secrets`, roles or role bindings. |
+| `writer` | `Azure Kubernetes Service RBAC Writer` | Reads and writes most objects, `Secrets` included, and can run pods as any service account in the namespace. |
+| `admin` | `Azure Kubernetes Service RBAC Admin` | `writer`, plus roles and role bindings inside the namespace. Cannot change the namespace itself or its quota - those come from here. |
+
+**`namespace_user` is the one that is easy to forget.** The three data plane roles say what a
+principal may do once it reaches the cluster; `namespace_user` is what lets it reach the cluster at
+all, by allowing `az aks namespace get-credentials` for that namespace:
+
+```sh
+az aks namespace get-credentials \
+  --resource-group <resource_group_name> \
+  --cluster-name "$(terraform output -raw name)" \
+  --name team-payments
+```
+
+Unlike the cluster-wide `Azure Kubernetes Service Cluster User Role`, which is
+[never created here](#cluster-access), this one is - a namespace-scoped kubeconfig is the whole
+point of granting at namespace scope, and it hands out nothing outside the namespace.
+
+The three data plane roles are enforced by
+[Azure RBAC for Kubernetes authorization][entraauthz], so they grant nothing while
+`azure_rbac_enabled = false`, and Terraform says so on every plan. `namespace_user` is a control
+plane role on the Azure resource and works either way. Nothing is granted at all while
+`create_role_assignments = false`, which is also warned about; the `managed_namespace_ids` output is
+what an estate in that arrangement scopes its own assignments to.
+
+Grants are addressed by namespace, role and principal rather than by their position in the list, so
+removing one entry does not renumber the assignments after it and have Azure drop and recreate them.
+
 ### What to watch for
 
 - **Something has to enforce the policies.** A `NetworkPolicy` in a cluster with no policy engine is
@@ -247,6 +305,10 @@ sent no quota at all rather than an empty one.
   cannot be on-boarded at all - `kube-system` and anything else starting with `kube-`,
   `gatekeeper-system`, `istio-system`, `app-routing-system` - and Terraform refuses the ones
   Microsoft names.
+- **A namespace grant does not carry over to the cluster.** `Azure Kubernetes Service Cluster User
+  Role` and the cluster-wide `entra_admin_group_object_ids` are separate, and a principal that has
+  only namespace grants cannot run `az aks get-credentials` or see anything outside its namespace -
+  which is the point, but it does mean `kubectl get nodes` comes back forbidden for them.
 - **`delete_policy = "Keep"` leaves the namespace behind.** Removing an entry from the variables
   file destroys the Azure resource but not the Kubernetes namespace, which is deliberate - a
   workload should not disappear because a line moved. Clean it up with `kubectl delete namespace`,

@@ -411,6 +411,26 @@ check "managed_namespaces_have_something_enforcing_their_network_policies" {
   }
 }
 
+# The three data plane roles are Azure RBAC roles, and a cluster authorizing through Kubernetes RBAC
+# does not consult Azure role assignments at all: the grants are made, Azure reports them, and every
+# kubectl from those principals still comes back forbidden. `namespace_user` is unaffected - it is a
+# control plane role on the Azure resource - so a namespace granted only that is not warned about.
+check "namespace_access_needs_azure_rbac" {
+  assert {
+    condition     = local.azure_rbac_enabled || length(local.managed_namespace_data_plane_grants) == 0
+    error_message = "${var.name} authorizes through Kubernetes RBAC, where the reader, writer and admin roles granted on its namespaces mean nothing: ${length(local.managed_namespace_data_plane_grants)} grant(s) would be created and no kubectl would be allowed by them. Set azure_rbac_enabled = true, or bind those principals inside the cluster with a Kubernetes RoleBinding in the namespace."
+  }
+}
+
+# With role assignments managed elsewhere the namespaces are still created here, but nobody is
+# granted anything on them - and the first sign of it is a team that cannot reach its own namespace.
+check "namespace_access_is_granted_somewhere" {
+  assert {
+    condition     = var.create_role_assignments || length(local.managed_namespace_access_grants) == 0
+    error_message = "${var.name} has create_role_assignments = false, so the ${length(local.managed_namespace_access_grants)} namespace grant(s) listed in managed_namespaces are not made here. Assign the roles on the namespace resource IDs - the managed_namespace_ids output - wherever the role assignments of this estate are managed."
+  }
+}
+
 # The upgrade windows. Azure fixes the three names: `default` covers the weekly AKS release of the
 # control plane and add-ons, `aksManagedAutoUpgradeSchedule` the Kubernetes version upgrade driven by
 # `upgrade_channel`, and `aksManagedNodeOSUpgradeSchedule` the node image patching driven by
@@ -491,4 +511,24 @@ resource "azapi_resource" "managed_namespace" {
   }
   # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates it.
   schema_validation_enabled = false
+}
+
+# Namespace-scoped access, granted on the namespace resource rather than on the cluster: a group or
+# a service principal listed here reaches that one namespace and has no way into the one next door.
+# `Azure Kubernetes Service Namespace User` is what lets a principal fetch a kubeconfig for the
+# namespace - `az aks namespace get-credentials` - so a team that is only meant to work in its own
+# namespace needs no cluster-wide grant at all, which is the point of managing namespaces here.
+#
+# The three data plane roles are enforced by Azure RBAC for Kubernetes authorization and grant
+# nothing without it; the check further up says so rather than leaving it to be discovered.
+resource "azurerm_role_assignment" "managed_namespace" {
+  for_each = local.managed_namespace_role_assignments
+
+  principal_id         = each.value.principal_id
+  scope                = azapi_resource.managed_namespace[each.value.namespace].id
+  role_definition_name = local.managed_namespace_role_definition_names[each.value.role]
+  # Stated for the same reason it is on the cluster grants: a group or service principal created
+  # moments ago has not replicated everywhere yet, and Azure fails an assignment to a principal it
+  # cannot look up.
+  principal_type = each.value.principal_type
 }

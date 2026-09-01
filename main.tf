@@ -86,14 +86,6 @@ resource "azurerm_user_assigned_identity" "this" {
   }
 }
 
-# The identity became countable when clusters that bring no network arrived. Without this, every
-# cluster that already has one would have it destroyed and rebuilt under the new address - and a
-# running cluster pointing at an identity that no longer exists loses access to its network.
-moved {
-  from = azurerm_user_assigned_identity.this
-  to   = azurerm_user_assigned_identity.this[0]
-}
-
 # Lets the cluster join nodes, load balancers and the integrated API server to the existing network.
 # A Base cluster is scoped to the subnets it uses; AKS Automatic is scoped to the whole virtual
 # network, because node autoprovisioning needs it. Either can be overridden through
@@ -105,14 +97,6 @@ resource "azurerm_role_assignment" "network_contributor" {
   scope                            = each.value
   role_definition_name             = "Network Contributor"
   skip_service_principal_aad_check = true
-}
-
-# Clusters created before the assignment was scoped down keep the virtual network wide one when they
-# ask for it, instead of dropping and recreating it. With the default subnet scope the wide
-# assignment is replaced by the narrow ones, which is the point of the change.
-moved {
-  from = azurerm_role_assignment.network_contributor[0]
-  to   = azurerm_role_assignment.network_contributor["virtual_network"]
 }
 
 # Lets the cluster register the API server record in the existing private DNS zone.
@@ -479,23 +463,6 @@ resource "azapi_resource" "maintenance_configuration" {
   }
   # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates it.
   schema_validation_enabled = false
-}
-
-# Clusters that already ran the module-managed configurations keep them, rather than having their
-# upgrade windows deleted and recreated. Safe to drop once every environment has applied this.
-moved {
-  from = module.aks.module.maintenanceconfiguration["aksManagedAutoUpgradeSchedule"].azapi_resource.this
-  to   = azapi_resource.maintenance_configuration["aksManagedAutoUpgradeSchedule"]
-}
-
-moved {
-  from = module.aks.module.maintenanceconfiguration["aksManagedNodeOSUpgradeSchedule"].azapi_resource.this
-  to   = azapi_resource.maintenance_configuration["aksManagedNodeOSUpgradeSchedule"]
-}
-
-moved {
-  from = module.aks.module.maintenanceconfiguration["default"].azapi_resource.this
-  to   = azapi_resource.maintenance_configuration["default"]
 }
 
 # The namespaces AKS creates and keeps inside the cluster. A managed namespace is an Azure resource

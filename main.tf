@@ -124,7 +124,7 @@ resource "time_sleep" "role_assignment_propagation" {
 
 module "aks" {
   source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
-  version = "0.8.2"
+  version = "0.8.3"
 
   location  = var.location
   name      = var.name

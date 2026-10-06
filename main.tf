@@ -500,7 +500,7 @@ resource "azapi_resource" "flux_extension" {
 resource "azapi_resource" "flux_configuration" {
   count = local.flux_enabled ? 1 : 0
 
-  name      = "main"
+  name      = "platform"
   parent_id = module.aks.resource_id
   type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
   body = {
@@ -513,10 +513,11 @@ resource "azapi_resource" "flux_configuration" {
         url                   = var.flux_git_repository.url
       }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
       kustomizations = {
-        main = {
-          path                  = var.flux_git_repository.path
-          prune                 = true
-          syncIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
+        platform = {
+          path                   = var.flux_git_repository.path
+          prune                  = true
+          syncIntervalInSeconds  = var.flux_git_repository.sync_interval_seconds
+          retryIntervalInSeconds = 900
         }
       }
       namespace  = "flux-system"

@@ -551,6 +551,135 @@ run "an_automatic_cluster_gets_flux_too" {
   }
 }
 
+run "a_public_flux_repository_is_sent_no_credentials" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.flux_configuration[0].body.properties.gitRepository), "httpsUser")
+    error_message = "A public repository needs no HTTPS user."
+  }
+  assert {
+    condition     = length(azapi_resource.flux_configuration[0].sensitive_body_version) == 0
+    error_message = "A public repository has no protected settings to send."
+  }
+}
+
+run "a_private_github_repository_is_read_with_a_token" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+    flux_git_credentials = {
+      https_key = "github_pat_example"
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.gitRepository.httpsUser == "git"
+    error_message = "The HTTPS user should default to git."
+  }
+  assert {
+    condition = toset(nonsensitive(keys(azapi_resource.flux_configuration[0].sensitive_body_version))) == toset([
+      "properties.configurationProtectedSettings.httpsKey",
+    ])
+    error_message = "The token should be sent as the httpsKey protected setting."
+  }
+  assert {
+    condition     = nonsensitive(azapi_resource.flux_configuration[0].sensitive_body_version["properties.configurationProtectedSettings.httpsKey"]) == sha256(base64encode("github_pat_example"))
+    error_message = "The token should be sent again whenever it changes."
+  }
+}
+
+run "a_private_github_repository_is_read_with_a_deploy_key" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "ssh://git@github.com/example/cluster-config"
+    }
+    flux_git_credentials = {
+      ssh_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----"
+    }
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.flux_configuration[0].body.properties.gitRepository), "httpsUser")
+    error_message = "An SSH repository needs no HTTPS user."
+  }
+  assert {
+    condition = toset(nonsensitive(keys(azapi_resource.flux_configuration[0].sensitive_body_version))) == toset([
+      "properties.configurationProtectedSettings.sshPrivateKey",
+    ])
+    error_message = "The key should be sent as the sshPrivateKey protected setting."
+  }
+}
+
+run "rejects_flux_credentials_without_a_repository" {
+  command = plan
+
+  variables {
+    flux_git_credentials = {
+      https_key = "github_pat_example"
+    }
+  }
+
+  expect_failures = [var.flux_git_credentials]
+}
+
+run "rejects_flux_credentials_with_both_a_token_and_a_key" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+    flux_git_credentials = {
+      https_key       = "github_pat_example"
+      ssh_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----"
+    }
+  }
+
+  expect_failures = [var.flux_git_credentials]
+}
+
+run "rejects_a_flux_token_for_an_ssh_repository" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "ssh://git@github.com/example/cluster-config"
+    }
+    flux_git_credentials = {
+      https_key = "github_pat_example"
+    }
+  }
+
+  expect_failures = [var.flux_git_credentials]
+}
+
+run "rejects_a_flux_deploy_key_for_an_https_repository" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+    flux_git_credentials = {
+      ssh_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----"
+    }
+  }
+
+  expect_failures = [var.flux_git_credentials]
+}
+
 run "rejects_a_flux_repository_url_without_a_scheme" {
   command = plan
 

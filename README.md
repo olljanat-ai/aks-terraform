@@ -507,7 +507,29 @@ flux_git_repository = {
 That installs the Flux cluster extension (`microsoft.flux`) into `flux-system`, kept on the newest
 minor version of the `Stable` release train, and creates a Flux configuration named `main` that
 reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300). Flux prunes what
-is removed from the repository. The repository must be readable without credentials.
+is removed from the repository.
+
+### Private repositories
+
+A private repository also needs `flux_git_credentials`, with exactly one of:
+
+| Credential | URL | On GitHub |
+| --- | --- | --- |
+| `https_key` | `https://github.com/<org>/<repo>` | A fine-grained personal access token with read-only `Contents` on the repository. |
+| `ssh_private_key` | `ssh://git@github.com/<org>/<repo>` | The private half of a read-only deploy key on the repository. |
+
+The variable is sensitive and sent to Azure **write-only**: the credential is not stored in the
+Terraform state, only a SHA-256 hash of it, which is how a rotated credential gets sent again on the
+next apply. Keep it out of the variables file and pass it from a secret store instead:
+
+```sh
+export TF_VAR_flux_git_credentials='{ https_key = "github_pat_..." }'
+# or
+export TF_VAR_flux_git_credentials="{ ssh_private_key = $(jq -Rs . < deploy_key) }"
+terraform apply -var-file=envs/prototype-free.tfvars
+```
+
+The Flux extension already knows GitHub's SSH host keys, so no `known_hosts` is needed.
 
 Leave `flux_git_repository` unset and Flux is not installed at all.
 

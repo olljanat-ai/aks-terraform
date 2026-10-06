@@ -30,7 +30,7 @@ api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 # the cluster: `Azure Kubernetes Service RBAC Cluster Admin` for the admins, `... RBAC Reader` for
 # the readers. Members of both still need `Azure Kubernetes Service Cluster User Role` on the
 # cluster to download a kubeconfig at all, which is granted elsewhere.
-entra_admin_group_object_ids  = []
+entra_admin_group_object_ids  = ["2c406e00-7a2a-447a-a617-ff0c907380e3"]
 entra_reader_group_object_ids = []
 
 default_node_pool = {

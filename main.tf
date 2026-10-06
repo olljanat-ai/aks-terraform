@@ -465,14 +465,13 @@ resource "azapi_resource" "maintenance_configuration" {
   schema_validation_enabled = false
 }
 
-# The Flux cluster extension, so that workloads reach the cluster through GitOps. Every Base cluster
-# gets it; AKS Automatic clusters do not. Azure installs the Flux controllers into `flux-system` and
-# keeps them on the newest minor version of the stable release train. What the controllers sync is
-# not configured here - that is a `fluxConfigurations` resource, or a `GitRepository` and
-# `Kustomization` applied inside the cluster, and belongs to whatever deploys the workloads.
+# GitOps through Flux, for a cluster that names a repository in flux_git_repository - on either SKU.
+# The extension installs the Flux controllers into `flux-system` and keeps them on the newest minor
+# version of the stable release train; the configuration points them at the repository and
+# reconciles the one Kustomization the cluster's main configuration lives in.
 #
-# The module has no input for cluster extensions, so the extension is written here with AzAPI, like
-# the upgrade windows and the namespaces.
+# The module has no input for cluster extensions, so both are written here with AzAPI, like the
+# upgrade windows and the namespaces.
 resource "azapi_resource" "flux_extension" {
   count = local.flux_enabled ? 1 : 0
 
@@ -491,6 +490,39 @@ resource "azapi_resource" "flux_extension" {
       }
     }
   }
+}
+
+# `prune` lets Flux delete what was removed from the repository, so the cluster follows the
+# repository rather than accumulating everything it ever contained.
+resource "azapi_resource" "flux_configuration" {
+  count = local.flux_enabled ? 1 : 0
+
+  name      = "main"
+  parent_id = module.aks.resource_id
+  type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
+  body = {
+    properties = {
+      gitRepository = {
+        repositoryRef = {
+          branch = var.flux_git_repository.branch
+        }
+        syncIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
+        url                   = var.flux_git_repository.url
+      }
+      kustomizations = {
+        main = {
+          path                  = var.flux_git_repository.path
+          prune                 = true
+          syncIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
+        }
+      }
+      namespace  = "flux-system"
+      scope      = "cluster"
+      sourceKind = "GitRepository"
+    }
+  }
+
+  depends_on = [azapi_resource.flux_extension]
 }
 
 # The namespaces AKS creates and keeps inside the cluster. A managed namespace is an Azure resource

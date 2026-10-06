@@ -39,7 +39,9 @@ These must exist before running Terraform:
   - for AKS Automatic, a subnet for the hosted system components, which must be a different subnet
     from the node one;
   - a subnet delegated to `Microsoft.ContainerService/managedClusters` and at least a `/28`, only
-    while [API Server VNet Integration](#api-server-vnet-integration) is in use.
+    while [API Server VNet Integration](#api-server-vnet-integration) is in use;
+  - a subnet delegated to `Microsoft.ServiceNetworking/trafficControllers` and exactly a `/24`, for
+    [Application Gateway for Containers](#ingress-through-the-gateway-api).
 
   See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
@@ -51,6 +53,18 @@ nothing else about the existing estate. `envs/prototype-free.tfvars` needs all o
 The identity running Terraform needs `Contributor` on the resource group and, unless
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
 private DNS zone.
+
+Every cluster runs the Application Gateway for Containers add-on, which is in **preview**. The
+subscription needs its preview features and resource providers registered first:
+
+```sh
+az feature register --namespace Microsoft.ContainerService --name ManagedGatewayAPIPreview
+az feature register --namespace Microsoft.ContainerService --name ApplicationLoadBalancerPreview
+az provider register --namespace Microsoft.ContainerService
+az provider register --namespace Microsoft.Network
+az provider register --namespace Microsoft.NetworkFunction
+az provider register --namespace Microsoft.ServiceNetworking
+```
 
 The `Microsoft.PolicyInsights` resource provider should be **registered in the subscription**, since
 both SKUs run the Azure Policy add-on and AKS Automatic installs it whether or not you ask:
@@ -449,8 +463,8 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 ## Monitoring and ingress
 
 Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
-Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by AKS itself - see
-[Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Application Gateway
+for Containers - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
 otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
@@ -459,11 +473,11 @@ otherwise duplicate them are off on every cluster, with no variable to turn them
 | [Azure Monitor managed Prometheus][prometheus] | Scrapes cluster metrics into an Azure Monitor workspace. |
 | Control plane [diagnostic setting][diagnostics] | Ships the API server, audit and autoscaler logs to a Log Analytics workspace. |
 | [Defender for Containers][defender] | Runs the Defender security agent on the nodes for threat detection. |
-| [Application Routing][approuting] NGINX (`webAppRouting`) | Installs and manages the default NGINX ingress controller, for the legacy Ingress API. |
+| [Application Routing][approuting] (`webAppRouting`) | Installs and manages the default NGINX ingress controller, or an Istio based Gateway API implementation. |
 
 Most of them are stated as disabled rather than simply left unconfigured, because Azure turns them
 on by itself otherwise: **AKS Automatic** creates a cluster with Container Insights, managed
-Prometheus and App Routing NGINX already enabled, and a subscription running the **Defender for Containers
+Prometheus and App Routing already enabled, and a subscription running the **Defender for Containers
 plan** with auto-provisioning on enables the security agent on clusters as they appear.
 
 Two consequences worth knowing about:
@@ -493,25 +507,43 @@ reported on. AKS Automatic always runs it.
 
 ## Ingress through the Gateway API
 
-Every cluster runs the [App Routing Gateway API implementation][approutinggw], which Microsoft
-supports as the successor of App Routing NGINX:
+Every cluster publishes its workloads through [Application Gateway for Containers][agc] (AGC), the
+Azure load balancer for the [Kubernetes Gateway API][gatewayapi]. The proxies are an Azure resource
+outside the cluster rather than pods inside it, and the cluster runs only the controller that
+programs them:
 
 | Setting | What it does |
 | --- | --- |
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
-| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode = "Enabled"` | A meshless Istio control plane in `aks-istio-system` that serves the `approuting-istio` GatewayClass: no sidecars, no Istio CRDs, upgraded in place with the cluster. |
+| `ingressProfile.applicationLoadBalancer.enabled = true` | The [ALB Controller add-on][agcaddon]: the controller in `kube-system` and the `azure-alb-external` GatewayClass. |
+| `securityProfile.workloadIdentity.enabled = true` | Workload identity, which the controller authenticates to Azure with. |
 
-AKS provides the GatewayClass and nothing else. Each `Gateway` - its listeners, hostnames and TLS
-certificates - is created through [Flux](#gitops-with-flux), and gets an Envoy `Deployment`, a
-`LoadBalancer` `Service`, an HPA of two to five replicas and a PDB of its own in its namespace. The
-Istio service mesh add-on cannot run alongside it.
+The add-on is in **preview** - see [Prerequisites](#prerequisites) for the features to register - and
+asking for it moves the cluster to the `2025-09-02-preview` API, the one the module sends it on.
 
-AKS can also take the certificate of a listener from Azure Key Vault and publish its hostname to
-Azure DNS, through the App Routing operator - which needs App Routing itself, the Key Vault provider
-for the Secrets Store CSI driver, a DNS zone and a workload identity, none of which are configured
-here. Where a cluster has none of those, the certificates come from inside the cluster instead.
+AKS creates an identity for the controller, `applicationloadbalancer-<cluster>` in the node resource
+group, with its rights there already granted. What it lacks is the subnet the load balancer joins
+to reach the pods:
 
-[approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
+- **In an existing network**, that is `application_gateway_for_containers_subnet_name`: a subnet of
+  its own, delegated to `Microsoft.ServiceNetworking/trafficControllers`, and exactly a `/24` - the
+  only size AGC supports on Azure CNI Overlay. It has to be in the cluster's own virtual network,
+  not a peered one. Terraform grants the controller identity `Network Contributor` on it once the
+  cluster exists, and warns on every plan for a cluster in an existing network that names none.
+- **Without a network of its own**, AKS creates the subnet, `aks-appgateway`, and there is nothing
+  to name or grant.
+
+Nothing here creates the load balancer itself. It is defined through [Flux](#gitops-with-flux) as an
+`ApplicationLoadBalancer` that names the subnet - the `application_gateway_for_containers_subnet_id`
+output - and the controller creates the AGC resource in the node resource group to match. The
+Gateways, their listeners and their TLS certificates are defined there as well.
+
+Traffic reaches the pods from addresses in that subnet, not from a namespace inside the cluster, so
+a managed namespace that keeps its default closed ingress has to let the subnet's range in with a
+`NetworkPolicy` of its own.
+
+[agc]: https://learn.microsoft.com/azure/application-gateway/for-containers/overview
+[agcaddon]: https://learn.microsoft.com/azure/application-gateway/for-containers/quickstart-deploy-application-gateway-for-containers-alb-controller-addon
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
 [managedgw]: https://learn.microsoft.com/azure/aks/managed-gateway-api
 

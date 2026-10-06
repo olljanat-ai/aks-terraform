@@ -365,6 +365,36 @@ private DNS zone is used, so it defaults to the cluster name in that case.
 DESCRIPTION
 }
 
+variable "flux_git_repository" {
+  type = object({
+    url                   = string
+    branch                = optional(string, "main")
+    path                  = optional(string, "./")
+    sync_interval_seconds = optional(number, 300)
+  })
+  default     = null
+  description = <<DESCRIPTION
+The one Git repository the cluster syncs its main configuration from through Flux. Setting it
+installs the Flux cluster extension and creates a Flux configuration named `main` that reconciles
+the Kustomization at `path` on `branch`, on either SKU. Leave it unset and Flux is not installed.
+
+The repository must be readable without credentials.
+DESCRIPTION
+
+  validation {
+    condition     = var.flux_git_repository == null || can(regex("^(https?|ssh)://", var.flux_git_repository.url))
+    error_message = "flux_git_repository.url must start with https://, http:// or ssh://."
+  }
+  validation {
+    condition     = var.flux_git_repository == null || try(trimspace(var.flux_git_repository.branch) != "", false)
+    error_message = "flux_git_repository.branch must not be empty."
+  }
+  validation {
+    condition     = var.flux_git_repository == null || try(var.flux_git_repository.sync_interval_seconds >= 60, false)
+    error_message = "flux_git_repository.sync_interval_seconds must be at least 60."
+  }
+}
+
 variable "kubernetes_version" {
   type        = string
   default     = null

@@ -491,13 +491,25 @@ run "upgrade_windows_cover_all_three_schedules_and_send_no_start_date" {
 # Flux
 # ----------------------------------------------------------------------------------------------
 
-run "a_base_cluster_gets_the_flux_extension" {
+run "a_cluster_without_a_flux_repository_gets_no_flux" {
   command = plan
 
   assert {
-    condition     = length(azapi_resource.flux_extension) == 1
-    error_message = "Every cluster that is not AKS Automatic should get the Flux extension."
+    condition     = length(azapi_resource.flux_extension) + length(azapi_resource.flux_configuration) == 0
+    error_message = "Flux should only be installed when flux_git_repository is set."
   }
+}
+
+run "a_flux_repository_installs_flux_and_syncs_it" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
   assert {
     condition     = azapi_resource.flux_extension[0].body.properties.extensionType == "microsoft.flux"
     error_message = "The extension should be Flux."
@@ -506,9 +518,21 @@ run "a_base_cluster_gets_the_flux_extension" {
     condition     = azapi_resource.flux_extension[0].body.properties.scope.cluster.releaseNamespace == "flux-system"
     error_message = "Flux should be installed cluster-wide into flux-system."
   }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.gitRepository.url == "https://github.com/example/cluster-config"
+    error_message = "The configuration should sync the configured repository."
+  }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.gitRepository.repositoryRef.branch == "main"
+    error_message = "The branch should default to main."
+  }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.main.path == "./clusters/aks-test"
+    error_message = "The Kustomization should reconcile the configured path."
+  }
 }
 
-run "an_automatic_cluster_gets_no_flux_extension" {
+run "an_automatic_cluster_gets_flux_too" {
   command = plan
 
   variables {
@@ -516,12 +540,27 @@ run "an_automatic_cluster_gets_no_flux_extension" {
     sku_tier             = "Standard"
     virtual_network_name = null
     node_subnet_name     = null
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
   }
 
   assert {
-    condition     = length(azapi_resource.flux_extension) == 0
-    error_message = "AKS Automatic clusters should not get the Flux extension."
+    condition     = length(azapi_resource.flux_extension) == 1 && length(azapi_resource.flux_configuration) == 1
+    error_message = "Flux follows flux_git_repository, not the SKU."
   }
+}
+
+run "rejects_a_flux_repository_url_without_a_scheme" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "github.com/example/cluster-config"
+    }
+  }
+
+  expect_failures = [var.flux_git_repository]
 }
 
 run "warns_about_a_public_api_server_without_an_allowlist" {

@@ -59,8 +59,8 @@ both SKUs run the Azure Policy add-on and AKS Automatic installs it whether or n
 az provider register --namespace Microsoft.PolicyInsights
 ```
 
-Base clusters get the [Flux extension](#gitops-with-flux), which needs the
-`Microsoft.KubernetesConfiguration` resource provider registered as well:
+A cluster with a [Flux repository](#gitops-with-flux) needs the `Microsoft.KubernetesConfiguration`
+resource provider registered as well:
 
 ```sh
 az provider register --namespace Microsoft.KubernetesConfiguration
@@ -493,14 +493,23 @@ reported on. AKS Automatic always runs it.
 
 ## GitOps with Flux
 
-Every cluster that is **not** on the Automatic SKU gets the [Flux cluster extension][flux]
-(`microsoft.flux`), with no variable to turn it off. Azure installs the Flux controllers into the
-`flux-system` namespace and keeps them on the newest minor version of the `Stable` release train.
-AKS Automatic clusters do not get it.
+A cluster can sync its main configuration from one Git repository through [Flux][flux]. Name the
+repository in the variables file, on either SKU:
 
-Only the controllers are installed. What they sync - a `fluxConfigurations` resource on the
-cluster, or a `GitRepository` and `Kustomization` applied inside it - is left to whatever deploys
-the workloads.
+```hcl
+flux_git_repository = {
+  url    = "https://github.com/example/cluster-config"
+  branch = "main"                 # default
+  path   = "./clusters/prototype" # default "./"
+}
+```
+
+That installs the Flux cluster extension (`microsoft.flux`) into `flux-system`, kept on the newest
+minor version of the `Stable` release train, and creates a Flux configuration named `main` that
+reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300). Flux prunes what
+is removed from the repository. The repository must be readable without credentials.
+
+Leave `flux_git_repository` unset and Flux is not installed at all.
 
 [flux]: https://learn.microsoft.com/azure/azure-arc/kubernetes/conceptual-gitops-flux2
 

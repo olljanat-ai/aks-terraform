@@ -570,6 +570,9 @@ resource "azapi_resource" "flux_configuration" {
           prune                  = true
           syncIntervalInSeconds  = var.flux_git_repository.sync_interval_seconds
           retryIntervalInSeconds = 900
+          postBuild = length(local.flux_cluster_settings) == 0 ? null : {
+            substitute = local.flux_cluster_settings
+          }
         }
       }
       namespace  = "flux-system"

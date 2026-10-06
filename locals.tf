@@ -18,6 +18,19 @@ locals {
   )
   flux_https_user = try(nonsensitive(var.flux_git_credentials.https_key != null ? var.flux_git_credentials.https_user : null), null)
 
+  # What the cluster's Flux repository is told about the Azure side of the cluster, as post-build
+  # variables of the `platform` Kustomization: the facts it cannot know on its own and should not
+  # have copied into it by hand. clusters/<cluster>/ in the repository passes them on to whatever
+  # needs them. A value the cluster does not have is left out rather than sent empty.
+  flux_cluster_settings = {
+    for name, value in {
+      # The subnet Application Gateway for Containers joins, for the ApplicationLoadBalancer that
+      # creates it, and its range, for the NetworkPolicies that let it reach the pods.
+      agc_subnet_id   = one(data.azurerm_subnet.application_gateway_for_containers[*].id)
+      agc_subnet_cidr = try(data.azurerm_subnet.application_gateway_for_containers[0].address_prefixes[0], null)
+    } : name => value if value != null
+  }
+
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
 

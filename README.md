@@ -565,6 +565,20 @@ minor version of the `Stable` release train, and creates a Flux configuration na
 reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300). Flux prunes what
 is removed from the repository.
 
+The `platform` Kustomization is also given the Azure facts the repository cannot know on its own, as
+Flux [post-build variables][postbuild], so they are never copied into it by hand:
+
+| Variable | Value |
+| --- | --- |
+| `agc_subnet_id` | Resource ID of `application_gateway_for_containers_subnet_name`, for the `ApplicationLoadBalancer`. |
+| `agc_subnet_cidr` | Its address range, for the `NetworkPolicy`s that let Application Gateway for Containers reach the pods. |
+
+A variable the cluster has no value for - both of these, on a cluster that brings no network - is
+left out rather than sent empty. They apply to what `path` holds itself; the repository passes them
+on from there to whatever needs them.
+
+[postbuild]: https://fluxcd.io/flux/components/kustomize/kustomizations/#post-build-variable-substitution
+
 ### Private repositories
 
 A private repository also needs `flux_git_credentials`, with exactly one of:

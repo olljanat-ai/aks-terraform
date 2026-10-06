@@ -19,7 +19,8 @@ mock_provider "azurerm" {
   }
   mock_data "azurerm_subnet" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test/subnets/snet-aks-nodes"
+      id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test/subnets/snet-aks-nodes"
+      address_prefixes = ["172.19.0.0/24"]
     }
   }
   mock_data "azurerm_private_dns_zone" {
@@ -2533,3 +2534,42 @@ run "refuses_the_node_subnet_as_the_gateway_subnet" {
 
   expect_failures = [var.application_gateway_for_containers_subnet_name]
 }
+
+run "flux_is_told_where_the_gateway_subnet_is" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.agc_subnet_id == data.azurerm_subnet.application_gateway_for_containers[0].id,
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.agc_subnet_cidr == data.azurerm_subnet.application_gateway_for_containers[0].address_prefixes[0],
+    ])
+    error_message = "The platform Kustomization should be given the ID and range of the Application Gateway for Containers subnet."
+  }
+}
+
+run "flux_is_told_nothing_it_has_no_value_for" {
+  command = plan
+
+  variables {
+    application_gateway_for_containers_subnet_name = null
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
+  expect_failures = [check.application_gateway_for_containers_has_a_subnet]
+
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild == null
+    error_message = "With no subnet to tell Flux about, the platform Kustomization should be sent no post-build variables."
+  }
+}
+

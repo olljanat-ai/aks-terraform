@@ -16,7 +16,7 @@ resource_group_name = "rg-aks-prototype"
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
 virtual_network_name = "vnet-aks-prototype"
 node_subnet_name     = "snet-aks-nodes"
-# virtual_network_resource_group_name = "rg-network"
+virtual_network_resource_group_name = "rg-network"
 
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
@@ -65,3 +65,9 @@ default_node_pool = {
 #     resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
 #   }
 # }
+
+flux_git_repository = {
+  url    = "https://github.com/olljanat-ai/aks-fluxcd"
+  branch = "main"
+  path   = "./clusters/prototype"
+}

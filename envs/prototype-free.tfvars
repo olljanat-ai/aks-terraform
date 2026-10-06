@@ -18,6 +18,11 @@ virtual_network_name                = "vnet-aks-prototype"
 node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
+# Subnet Application Gateway for Containers joins to reach the pods: exactly a /24, delegated to
+# Microsoft.ServiceNetworking/trafficControllers, used for nothing else. Created ahead of time like
+# the rest of the network; the add-on identity is granted Network Contributor on it.
+application_gateway_for_containers_subnet_name = "snet-aks-alb"
+
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 # private_dns_zone_resource_group_name = "rg-network"
@@ -68,7 +73,8 @@ default_node_pool = {
 
 # The `example` team. Flux deploys olljanat-ai/aks-hello into it (see olljanat-ai/aks-fluxcd,
 # tenants/example), and the app publishes itself through the shared Gateway. It keeps the default
-# closed ingress: the app's own NetworkPolicy lets the Gateway's proxies in, and nothing else.
+# closed ingress: a NetworkPolicy from aks-fluxcd lets Application Gateway for Containers in from
+# snet-aks-alb, and nothing else.
 managed_namespaces = {
   example = {}
 }

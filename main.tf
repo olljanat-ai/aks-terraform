@@ -37,6 +37,17 @@ data "azurerm_subnet" "api_server" {
   virtual_network_name = var.virtual_network_name
 }
 
+# The subnet Application Gateway for Containers joins to reach the pods. Only a cluster in an existing
+# network names one; AKS creates `aks-appgateway` in the network it makes for a cluster that brings
+# none.
+data "azurerm_subnet" "application_gateway_for_containers" {
+  count = var.application_gateway_for_containers_subnet_name == null ? 0 : 1
+
+  name                 = var.application_gateway_for_containers_subnet_name
+  resource_group_name  = local.virtual_network_resource_group_name
+  virtual_network_name = var.virtual_network_name
+}
+
 data "azurerm_private_dns_zone" "this" {
   count = local.use_byo_private_dns_zone ? 1 : 0
 
@@ -176,16 +187,23 @@ module "aks" {
     node_subnet_id        = one(data.azurerm_subnet.node[*].id)
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
-  # Ingress is the Kubernetes Gateway API, served by the App Routing Gateway API implementation: the
-  # managed Gateway API CRDs (standard channel) and the meshless Istio control plane App Routing runs
-  # in aks-istio-system, which provides the `approuting-istio` GatewayClass. The Gateways, their
-  # listeners and their certificates are created through Flux - see the README.
+  # Ingress is the Kubernetes Gateway API, served by Application Gateway for Containers: the managed
+  # Gateway API CRDs (standard channel) and the ALB Controller add-on, which provides the
+  # `azure-alb-external` GatewayClass and runs in kube-system on an identity of its own. The load
+  # balancer itself is an Azure resource the controller creates in the node resource group once an
+  # `ApplicationLoadBalancer` is defined in the cluster; that, the Gateways, their listeners and their
+  # certificates are created through Flux - see the README.
   #
-  # App Routing's NGINX ingress controller, the legacy Ingress API one, stays off. Everything is
-  # stated rather than left out, because AKS Automatic enables App Routing with NGINX unless the
-  # create request says otherwise - and because the module cannot validate a partially filled
-  # ingress_profile: it reads through the nested objects and fails on the ones left null.
+  # Every other managed ingress AKS offers stays off: App Routing with its NGINX controller and the
+  # Istio based Gateway API implementation App Routing can provide. All of it is stated rather than
+  # left out, because AKS Automatic enables App Routing unless the create request says otherwise -
+  # and because the module cannot validate a partially filled ingress_profile: it reads through the
+  # nested objects and fails on the ones left null. Asking for the add-on also moves the module to
+  # the 2025-09-02-preview cluster API, the one the add-on is available on.
   ingress_profile = {
+    application_load_balancer = {
+      enabled = true
+    }
     gateway_api = {
       installation = "Standard"
     }
@@ -193,7 +211,7 @@ module "aks" {
       enabled = false
       gateway_api_implementations = {
         app_routing_istio = {
-          mode = "Enabled"
+          mode = "Disabled"
         }
       }
       nginx = {
@@ -246,6 +264,11 @@ module "aks" {
       enabled        = true
       interval_hours = 168
     }
+    # Federates Kubernetes service accounts with Entra ID. The Application Gateway for Containers
+    # add-on authenticates to Azure this way, and does not install without it.
+    workload_identity = {
+      enabled = true
+    }
   }
 
   auto_upgrade_profile = {
@@ -292,6 +315,32 @@ resource "azurerm_role_assignment" "entra_reader" {
   scope                = module.aks.resource_id
   role_definition_name = "Azure Kubernetes Service RBAC Reader"
   principal_type       = "Group"
+}
+
+# Lets the Application Gateway for Containers add-on join the load balancer it creates to the subnet
+# in the existing network. The add-on's identity - `applicationloadbalancer-<cluster>`, in the node
+# resource group - is created by AKS together with the cluster and comes with its rights on the node
+# resource group already, so this is the one grant it is missing, and it can only be made once the
+# cluster exists. Network Contributor is what Microsoft documents; the action that is actually needed
+# is `Microsoft.Network/virtualNetworks/subnets/join/action`.
+resource "azurerm_role_assignment" "application_gateway_for_containers_subnet" {
+  count = var.create_role_assignments && var.application_gateway_for_containers_subnet_name != null ? 1 : 0
+
+  principal_id         = module.aks.ingress_profile_application_load_balancer_identity.objectId
+  scope                = data.azurerm_subnet.application_gateway_for_containers[0].id
+  role_definition_name = "Network Contributor"
+  principal_type       = "ServicePrincipal"
+}
+
+# Application Gateway for Containers needs a delegated subnet to join. AKS creates one for a cluster
+# that brings no network; a cluster in an existing network has to be given one, or the add-on is
+# installed and every ApplicationLoadBalancer defined in the cluster fails to provision. Terraform
+# warns rather than refuses, because a cluster can still be built and used without ingress.
+check "application_gateway_for_containers_has_a_subnet" {
+  assert {
+    condition     = !local.byo_network || var.application_gateway_for_containers_subnet_name != null
+    error_message = "${var.name} is attached to an existing virtual network and names no application_gateway_for_containers_subnet_name, so Application Gateway for Containers has no subnet to join and cannot publish anything. Create a /24 subnet in ${coalesce(var.virtual_network_name, "the network")} delegated to Microsoft.ServiceNetworking/trafficControllers and name it there."
+  }
 }
 
 # A public API server with no allowlist is reachable from anywhere on the internet, and Azure will

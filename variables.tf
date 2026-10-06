@@ -125,6 +125,29 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "application_gateway_for_containers_subnet_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of the existing subnet Application Gateway for Containers joins to reach the pods, in
+`virtual_network_name`. It must be delegated to `Microsoft.ServiceNetworking/trafficControllers`,
+be exactly a `/24` - the only size AGC supports on Azure CNI Overlay - and be used for nothing else.
+The add-on identity is granted `Network Contributor` on it.
+
+Only for a cluster in an existing virtual network, which needs one for its ingress to work at all.
+A cluster that brings no network gets one from AKS (`aks-appgateway`) and cannot name its own.
+DESCRIPTION
+
+  validation {
+    condition     = var.virtual_network_name != null || var.application_gateway_for_containers_subnet_name == null
+    error_message = "application_gateway_for_containers_subnet_name names a subnet of an existing virtual network, and this cluster brings none. AKS creates the aks-appgateway subnet in the network it makes for the cluster."
+  }
+  validation {
+    condition     = var.application_gateway_for_containers_subnet_name == null || !contains(compact([var.node_subnet_name, var.system_node_subnet_name, var.api_server_subnet_name]), coalesce(var.application_gateway_for_containers_subnet_name, "-"))
+    error_message = "application_gateway_for_containers_subnet_name must name a subnet of its own. It is delegated to Microsoft.ServiceNetworking/trafficControllers, which no other subnet of the cluster can be."
+  }
+}
+
 variable "auto_upgrade" {
   type = object({
     kubernetes_channel = optional(string, "stable")

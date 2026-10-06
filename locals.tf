@@ -3,6 +3,12 @@ locals {
   # through the module. One place to bump, so that the two cannot drift apart.
   aks_api_version = "2026-03-01"
 
+  # API version of the Kubernetes Configuration resource provider, which owns cluster extensions.
+  kubernetes_configuration_api_version = "2024-11-01"
+
+  # The Flux extension goes on every cluster except AKS Automatic ones.
+  flux_enabled = !local.is_automatic
+
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
 

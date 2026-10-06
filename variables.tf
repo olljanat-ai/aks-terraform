@@ -365,6 +365,46 @@ private DNS zone is used, so it defaults to the cluster name in that case.
 DESCRIPTION
 }
 
+variable "flux_git_credentials" {
+  type = object({
+    https_user      = optional(string, "git")
+    https_key       = optional(string)
+    ssh_private_key = optional(string)
+  })
+  default     = null
+  description = <<DESCRIPTION
+How Flux authenticates to a private `flux_git_repository`. Set exactly one of:
+
+- `https_key` - a token for an `https://` URL. For GitHub, a fine-grained personal access token
+  with read-only `Contents` on the repository; GitHub ignores `https_user` for a token, so the
+  default `git` will do.
+- `ssh_private_key` - a PEM or OpenSSH private key for an `ssh://` URL, such as
+  `ssh://git@github.com/<org>/<repo>`. For GitHub, a read-only deploy key on the repository. Flux
+  ships with GitHub's host keys, so no known_hosts is needed.
+
+Sent to Azure write-only and never stored in the Terraform state. Keep it out of the variables
+file: pass it through `TF_VAR_flux_git_credentials` from a secret store instead.
+DESCRIPTION
+  sensitive   = true
+
+  validation {
+    condition     = var.flux_git_credentials == null || var.flux_git_repository != null
+    error_message = "flux_git_credentials is set without a flux_git_repository to use it for."
+  }
+  validation {
+    condition     = var.flux_git_credentials == null || try((var.flux_git_credentials.https_key != null) != (var.flux_git_credentials.ssh_private_key != null), false)
+    error_message = "flux_git_credentials needs exactly one of https_key and ssh_private_key."
+  }
+  validation {
+    condition     = var.flux_git_credentials == null || try(var.flux_git_credentials.https_key == null || startswith(var.flux_git_repository.url, "https://"), false)
+    error_message = "flux_git_credentials.https_key needs an https:// flux_git_repository.url - a token is never sent in the clear."
+  }
+  validation {
+    condition     = var.flux_git_credentials == null || try(var.flux_git_credentials.ssh_private_key == null || startswith(var.flux_git_repository.url, "ssh://"), false)
+    error_message = "flux_git_credentials.ssh_private_key needs an ssh:// flux_git_repository.url."
+  }
+}
+
 variable "flux_git_repository" {
   type = object({
     url                   = string
@@ -378,7 +418,7 @@ The one Git repository the cluster syncs its main configuration from through Flu
 installs the Flux cluster extension and creates a Flux configuration named `main` that reconciles
 the Kustomization at `path` on `branch`, on either SKU. Leave it unset and Flux is not installed.
 
-The repository must be readable without credentials.
+A private repository also needs `flux_git_credentials`.
 DESCRIPTION
 
   validation {

@@ -492,6 +492,9 @@ resource "azapi_resource" "flux_extension" {
   }
 }
 
+# A private repository is read with the credential in flux_git_credentials: a token over HTTPS, or an
+# SSH private key - see that variable.
+#
 # `prune` lets Flux delete what was removed from the repository, so the cluster follows the
 # repository rather than accumulating everything it ever contained.
 resource "azapi_resource" "flux_configuration" {
@@ -502,13 +505,13 @@ resource "azapi_resource" "flux_configuration" {
   type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
   body = {
     properties = {
-      gitRepository = {
+      gitRepository = merge({
         repositoryRef = {
           branch = var.flux_git_repository.branch
         }
         syncIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
         url                   = var.flux_git_repository.url
-      }
+      }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
       kustomizations = {
         main = {
           path                  = var.flux_git_repository.path
@@ -520,6 +523,18 @@ resource "azapi_resource" "flux_configuration" {
       scope      = "cluster"
       sourceKind = "GitRepository"
     }
+  }
+  # The token or private key of a private repository. Write-only: Azure gets it, the state does not.
+  # Terraform cannot see a write-only value change, so each one is sent again whenever its hash in
+  # sensitive_body_version moves - which is what makes rotating the credential an ordinary apply.
+  sensitive_body = length(local.flux_protected_settings) == 0 ? null : {
+    properties = {
+      configurationProtectedSettings = local.flux_protected_settings
+    }
+  }
+  sensitive_body_version = {
+    for setting, value in local.flux_protected_settings :
+    "properties.configurationProtectedSettings.${setting}" => sha256(value)
   }
 
   depends_on = [azapi_resource.flux_extension]

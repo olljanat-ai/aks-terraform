@@ -9,6 +9,15 @@ locals {
   # Flux is installed only for a cluster that names a repository for it to sync.
   flux_enabled = var.flux_git_repository != null
 
+  # The credential Flux reads a private repository with. Azure takes protected settings base64
+  # encoded, and the HTTPS user in the open next to the repository URL.
+  flux_protected_settings = var.flux_git_credentials == null ? {} : (
+    var.flux_git_credentials.https_key != null
+    ? { httpsKey = base64encode(var.flux_git_credentials.https_key) }
+    : { sshPrivateKey = base64encode(var.flux_git_credentials.ssh_private_key) }
+  )
+  flux_https_user = try(nonsensitive(var.flux_git_credentials.https_key != null ? var.flux_git_credentials.https_user : null), null)
+
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
 

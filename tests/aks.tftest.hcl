@@ -527,7 +527,7 @@ run "a_flux_repository_installs_flux_and_syncs_it" {
     error_message = "The branch should default to main."
   }
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.main.path == "./clusters/aks-test"
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.path == "./clusters/aks-test"
     error_message = "The Kustomization should reconcile the configured path."
   }
 }

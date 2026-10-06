@@ -415,7 +415,7 @@ variable "flux_git_repository" {
   default     = null
   description = <<DESCRIPTION
 The one Git repository the cluster syncs its main configuration from through Flux. Setting it
-installs the Flux cluster extension and creates a Flux configuration named `main` that reconciles
+installs the Flux cluster extension and creates a Flux configuration named `platform` that reconciles
 the Kustomization at `path` on `branch`, on either SKU. Leave it unset and Flux is not installed.
 
 A private repository also needs `flux_git_credentials`.

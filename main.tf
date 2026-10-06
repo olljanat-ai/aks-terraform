@@ -176,21 +176,24 @@ module "aks" {
     node_subnet_id        = one(data.azurerm_subnet.node[*].id)
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
-  # Ingress is handled by a third party controller installed into the cluster, so every managed
-  # ingress AKS offers is turned off: App Routing with its NGINX controller, the Istio based Gateway
-  # API implementation App Routing can front it with, and the managed Gateway API installation. All
-  # three are stated rather than left out, because AKS Automatic enables App Routing unless the
+  # Ingress is the Kubernetes Gateway API, served by the App Routing Gateway API implementation: the
+  # managed Gateway API CRDs (standard channel) and the meshless Istio control plane App Routing runs
+  # in aks-istio-system, which provides the `approuting-istio` GatewayClass. The Gateways, their
+  # listeners and their certificates are created through Flux - see the README.
+  #
+  # App Routing's NGINX ingress controller, the legacy Ingress API one, stays off. Everything is
+  # stated rather than left out, because AKS Automatic enables App Routing with NGINX unless the
   # create request says otherwise - and because the module cannot validate a partially filled
   # ingress_profile: it reads through the nested objects and fails on the ones left null.
   ingress_profile = {
     gateway_api = {
-      installation = "Disabled"
+      installation = "Standard"
     }
     web_app_routing = {
       enabled = false
       gateway_api_implementations = {
         app_routing_istio = {
-          mode = "Disabled"
+          mode = "Enabled"
         }
       }
       nginx = {

@@ -465,6 +465,34 @@ resource "azapi_resource" "maintenance_configuration" {
   schema_validation_enabled = false
 }
 
+# The Flux cluster extension, so that workloads reach the cluster through GitOps. Every Base cluster
+# gets it; AKS Automatic clusters do not. Azure installs the Flux controllers into `flux-system` and
+# keeps them on the newest minor version of the stable release train. What the controllers sync is
+# not configured here - that is a `fluxConfigurations` resource, or a `GitRepository` and
+# `Kustomization` applied inside the cluster, and belongs to whatever deploys the workloads.
+#
+# The module has no input for cluster extensions, so the extension is written here with AzAPI, like
+# the upgrade windows and the namespaces.
+resource "azapi_resource" "flux_extension" {
+  count = local.flux_enabled ? 1 : 0
+
+  name      = "flux"
+  parent_id = module.aks.resource_id
+  type      = "Microsoft.KubernetesConfiguration/extensions@${local.kubernetes_configuration_api_version}"
+  body = {
+    properties = {
+      autoUpgradeMinorVersion = true
+      extensionType           = "microsoft.flux"
+      releaseTrain            = "Stable"
+      scope = {
+        cluster = {
+          releaseNamespace = "flux-system"
+        }
+      }
+    }
+  }
+}
+
 # The namespaces AKS creates and keeps inside the cluster. A managed namespace is an Azure resource
 # rather than a `kubectl apply`: AKS reconciles the Kubernetes namespace, the default `NetworkPolicy`
 # and the default `ResourceQuota` from it, so a namespace survives being deleted by hand inside the

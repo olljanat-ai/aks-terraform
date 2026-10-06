@@ -487,6 +487,43 @@ run "upgrade_windows_cover_all_three_schedules_and_send_no_start_date" {
   }
 }
 
+# ----------------------------------------------------------------------------------------------
+# Flux
+# ----------------------------------------------------------------------------------------------
+
+run "a_base_cluster_gets_the_flux_extension" {
+  command = plan
+
+  assert {
+    condition     = length(azapi_resource.flux_extension) == 1
+    error_message = "Every cluster that is not AKS Automatic should get the Flux extension."
+  }
+  assert {
+    condition     = azapi_resource.flux_extension[0].body.properties.extensionType == "microsoft.flux"
+    error_message = "The extension should be Flux."
+  }
+  assert {
+    condition     = azapi_resource.flux_extension[0].body.properties.scope.cluster.releaseNamespace == "flux-system"
+    error_message = "Flux should be installed cluster-wide into flux-system."
+  }
+}
+
+run "an_automatic_cluster_gets_no_flux_extension" {
+  command = plan
+
+  variables {
+    sku_name             = "Automatic"
+    sku_tier             = "Standard"
+    virtual_network_name = null
+    node_subnet_name     = null
+  }
+
+  assert {
+    condition     = length(azapi_resource.flux_extension) == 0
+    error_message = "AKS Automatic clusters should not get the Flux extension."
+  }
+}
+
 run "warns_about_a_public_api_server_without_an_allowlist" {
   command = plan
 

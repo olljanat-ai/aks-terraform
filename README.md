@@ -59,6 +59,13 @@ both SKUs run the Azure Policy add-on and AKS Automatic installs it whether or n
 az provider register --namespace Microsoft.PolicyInsights
 ```
 
+Base clusters get the [Flux extension](#gitops-with-flux), which needs the
+`Microsoft.KubernetesConfiguration` resource provider registered as well:
+
+```sh
+az provider register --namespace Microsoft.KubernetesConfiguration
+```
+
 ## Usage
 
 Edit the environment's variables file to name your existing resources, then apply it:
@@ -483,6 +490,19 @@ reported on. AKS Automatic always runs it.
 [diagnostics]: https://learn.microsoft.com/azure/aks/monitor-aks-reference
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
 [prometheus]: https://learn.microsoft.com/azure/azure-monitor/essentials/prometheus-metrics-overview
+
+## GitOps with Flux
+
+Every cluster that is **not** on the Automatic SKU gets the [Flux cluster extension][flux]
+(`microsoft.flux`), with no variable to turn it off. Azure installs the Flux controllers into the
+`flux-system` namespace and keeps them on the newest minor version of the `Stable` release train.
+AKS Automatic clusters do not get it.
+
+Only the controllers are installed. What they sync - a `fluxConfigurations` resource on the
+cluster, or a `GitRepository` and `Kustomization` applied inside it - is left to whatever deploys
+the workloads.
+
+[flux]: https://learn.microsoft.com/azure/azure-arc/kubernetes/conceptual-gitops-flux2
 
 ## Node pool upgrades
 

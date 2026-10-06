@@ -448,10 +448,10 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 
 ## Monitoring and ingress
 
-Monitoring and ingress are handled by third party solutions running inside the cluster, so
-**nothing is sent to Azure Monitor and no managed ingress controller is installed**. The Azure
-features that would otherwise duplicate them are off on every cluster, with no variable to turn
-them back on:
+Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by AKS itself - see
+[Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
 | --- | --- |
@@ -459,11 +459,11 @@ them back on:
 | [Azure Monitor managed Prometheus][prometheus] | Scrapes cluster metrics into an Azure Monitor workspace. |
 | Control plane [diagnostic setting][diagnostics] | Ships the API server, audit and autoscaler logs to a Log Analytics workspace. |
 | [Defender for Containers][defender] | Runs the Defender security agent on the nodes for threat detection. |
-| [Application Routing][approuting] (`webAppRouting`) | Installs and manages the default NGINX ingress controller. |
+| [Application Routing][approuting] NGINX (`webAppRouting`) | Installs and manages the default NGINX ingress controller, for the legacy Ingress API. |
 
 Most of them are stated as disabled rather than simply left unconfigured, because Azure turns them
 on by itself otherwise: **AKS Automatic** creates a cluster with Container Insights, managed
-Prometheus and App Routing already enabled, and a subscription running the **Defender for Containers
+Prometheus and App Routing NGINX already enabled, and a subscription running the **Defender for Containers
 plan** with auto-provisioning on enables the security agent on clusters as they appear.
 
 Two consequences worth knowing about:
@@ -491,6 +491,30 @@ reported on. AKS Automatic always runs it.
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
 [prometheus]: https://learn.microsoft.com/azure/azure-monitor/essentials/prometheus-metrics-overview
 
+## Ingress through the Gateway API
+
+Every cluster runs the [App Routing Gateway API implementation][approutinggw], which Microsoft
+supports as the successor of App Routing NGINX:
+
+| Setting | What it does |
+| --- | --- |
+| `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
+| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode = "Enabled"` | A meshless Istio control plane in `aks-istio-system` that serves the `approuting-istio` GatewayClass: no sidecars, no Istio CRDs, upgraded in place with the cluster. |
+
+AKS provides the GatewayClass and nothing else. Each `Gateway` - its listeners, hostnames and TLS
+certificates - is created through [Flux](#gitops-with-flux), and gets an Envoy `Deployment`, a
+`LoadBalancer` `Service`, an HPA of two to five replicas and a PDB of its own in its namespace. The
+Istio service mesh add-on cannot run alongside it.
+
+AKS can also take the certificate of a listener from Azure Key Vault and publish its hostname to
+Azure DNS, through the App Routing operator - which needs App Routing itself, the Key Vault provider
+for the Secrets Store CSI driver, a DNS zone and a workload identity, none of which are configured
+here. Where a cluster has none of those, the certificates come from inside the cluster instead.
+
+[approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
+[gatewayapi]: https://gateway-api.sigs.k8s.io/
+[managedgw]: https://learn.microsoft.com/azure/aks/managed-gateway-api
+
 ## GitOps with Flux
 
 A cluster can sync its main configuration from one Git repository through [Flux][flux]. Name the
@@ -505,7 +529,7 @@ flux_git_repository = {
 ```
 
 That installs the Flux cluster extension (`microsoft.flux`) into `flux-system`, kept on the newest
-minor version of the `Stable` release train, and creates a Flux configuration named `main` that
+minor version of the `Stable` release train, and creates a Flux configuration named `platform` that
 reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300). Flux prunes what
 is removed from the repository.
 

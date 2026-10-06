@@ -14,8 +14,8 @@ sku_tier = "Free"
 resource_group_name = "rg-aks-prototype"
 
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
-virtual_network_name = "vnet-aks-prototype"
-node_subnet_name     = "snet-aks-nodes"
+virtual_network_name                = "vnet-aks-prototype"
+node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
 # Existing private DNS zone for the API server.
@@ -65,6 +65,13 @@ default_node_pool = {
 #     resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
 #   }
 # }
+
+# The `example` team. Flux deploys olljanat-ai/aks-hello into it (see olljanat-ai/aks-fluxcd,
+# tenants/example), and the app publishes itself through the shared Gateway. It keeps the default
+# closed ingress: the app's own NetworkPolicy lets the Gateway's proxies in, and nothing else.
+managed_namespaces = {
+  example = {}
+}
 
 flux_git_repository = {
   url    = "https://github.com/olljanat-ai/aks-fluxcd"

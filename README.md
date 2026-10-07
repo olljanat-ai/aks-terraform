@@ -545,6 +545,34 @@ Traffic reaches the pods from addresses in that subnet, not from a namespace ins
 a managed namespace that keeps its default closed ingress has to let the subnet's range in with a
 `NetworkPolicy` of its own.
 
+### Kubernetes Ingress through Application Gateway
+
+Workloads that still publish through Kubernetes `Ingress` rather than the Gateway API can be served
+by the [Application Gateway Ingress Controller][agic] (AGIC) add-on, which programs an existing
+Application Gateway v2 to match the `Ingress` resources in the cluster. It is off unless
+`application_gateway_ingress_controller` names the gateway:
+
+```hcl
+application_gateway_ingress_controller = {
+  application_gateway_name = "agw-aks-prd"
+  resource_group_name      = "rg-network-prd" # defaults to resource_group_name
+}
+```
+
+The gateway is not created here: it belongs with the network it is joined to. AKS creates an
+identity for the controller, `ingressapplicationgateway-<cluster>` in the node resource group, and
+once the cluster exists Terraform grants it what it needs on the gateway - `Contributor` on the
+gateway, `Reader` on its resource group and `Network Contributor` on its subnet - unless
+`create_role_assignments` is `false`. The gateway's subnet has to reach the pods: in the cluster's
+own virtual network or in one peered with it. The `application_gateway_ingress_controller_identity_principal_id`
+output is the identity, for any further grant it needs, such as reading listener certificates from
+Key Vault.
+
+AGIC owns the gateway's configuration: anything set on the gateway by hand or by another tool is
+overwritten the next time the controller reconciles, so give it a gateway of its own.
+
+[agic]: https://learn.microsoft.com/azure/application-gateway/ingress-controller-overview
+
 ### Certificates and DNS
 
 Application Gateway for Containers terminates TLS with certificates it reads from Kubernetes

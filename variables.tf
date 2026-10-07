@@ -148,6 +148,30 @@ DESCRIPTION
   }
 }
 
+variable "application_gateway_ingress_controller" {
+  type = object({
+    application_gateway_name = string
+    resource_group_name      = optional(string)
+  })
+  default     = null
+  description = <<DESCRIPTION
+Turns on the [Application Gateway Ingress Controller][agic] (AGIC) add-on and points it at an
+existing Application Gateway v2, which then serves the Kubernetes `Ingress` resources of the
+cluster next to the Gateway API served by Application Gateway for Containers. Leave it unset and
+the add-on stays off.
+
+- `application_gateway_name` - Name of the existing Application Gateway.
+- `resource_group_name` - Its resource group. Defaults to `resource_group_name`.
+
+The add-on identity AKS creates is granted `Contributor` on the gateway, `Reader` on its resource
+group and `Network Contributor` on its subnet, unless `create_role_assignments` is `false`. The
+gateway's subnet has to be routable to the pods: in the cluster's own virtual network, or in one
+peered with it.
+
+[agic]: https://learn.microsoft.com/azure/application-gateway/ingress-controller-overview
+DESCRIPTION
+}
+
 variable "auto_upgrade" {
   type = object({
     kubernetes_channel = optional(string, "stable")

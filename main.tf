@@ -64,6 +64,17 @@ data "azurerm_dns_zone" "this" {
   resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
 }
 
+# The existing Application Gateway the Application Gateway Ingress Controller add-on programs, looked
+# up only when the add-on is asked for. AGIC never creates a gateway here: AKS would put one in the
+# node resource group, with a subnet of its own carved out of the cluster's network, and both are
+# better managed alongside the network they belong to.
+data "azurerm_application_gateway" "ingress" {
+  count = var.application_gateway_ingress_controller == null ? 0 : 1
+
+  name                = var.application_gateway_ingress_controller.application_gateway_name
+  resource_group_name = coalesce(var.application_gateway_ingress_controller.resource_group_name, var.resource_group_name)
+}
+
 data "azurerm_private_dns_zone" "this" {
   count = local.use_byo_private_dns_zone ? 1 : 0
 
@@ -165,6 +176,16 @@ module "aks" {
   # Gatekeeper, so that Azure Policy definitions are actually enforced inside the cluster.
   addon_profile_azure_policy = {
     enabled = var.azure_policy_enabled
+  }
+  # Application Gateway Ingress Controller, for workloads still published through Kubernetes
+  # `Ingress` rather than the Gateway API. It runs in kube-system on an identity AKS creates for it,
+  # `ingressapplicationgateway-<cluster>` in the node resource group, and is granted its rights on
+  # the gateway below.
+  addon_profile_ingress_application_gateway = var.application_gateway_ingress_controller == null ? null : {
+    enabled = true
+    config = {
+      application_gateway_id = data.azurerm_application_gateway.ingress[0].id
+    }
   }
   # Container Insights stays off: node and pod telemetry is collected by the third party agent that
   # runs inside the cluster. AKS Automatic turns the add-on on by itself unless the request says
@@ -347,6 +368,24 @@ resource "azurerm_role_assignment" "application_gateway_for_containers_subnet" {
   principal_id         = module.aks.ingress_profile_application_load_balancer_identity.objectId
   scope                = data.azurerm_subnet.application_gateway_for_containers[0].id
   role_definition_name = "Network Contributor"
+  principal_type       = "ServicePrincipal"
+}
+
+# What the Application Gateway Ingress Controller add-on needs to program the existing gateway: AKS
+# grants its identity rights on the node resource group only. Contributor on the gateway lets it
+# rewrite the listeners, rules and backend pools; Reader on the gateway's resource group lets it find
+# the gateway; and Network Contributor on the gateway's subnet lets it update a gateway that is joined
+# to it. Like the subnet grant above, all three can only be made once the cluster exists.
+resource "azurerm_role_assignment" "application_gateway_ingress_controller" {
+  for_each = var.create_role_assignments && var.application_gateway_ingress_controller != null ? {
+    gateway        = { scope = data.azurerm_application_gateway.ingress[0].id, role = "Contributor" }
+    resource_group = { scope = join("/", slice(split("/", data.azurerm_application_gateway.ingress[0].id), 0, 5)), role = "Reader" }
+    subnet         = { scope = data.azurerm_application_gateway.ingress[0].gateway_ip_configuration[0].subnet_id, role = "Network Contributor" }
+  } : {}
+
+  principal_id         = module.aks.ingress_app_object_id
+  scope                = each.value.scope
+  role_definition_name = each.value.role
   principal_type       = "ServicePrincipal"
 }
 

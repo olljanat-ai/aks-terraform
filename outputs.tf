@@ -8,6 +8,11 @@ output "application_gateway_for_containers_subnet_id" {
   value       = one(data.azurerm_subnet.application_gateway_for_containers[*].id)
 }
 
+output "application_gateway_ingress_controller_identity_principal_id" {
+  description = "Object ID of the identity the Application Gateway Ingress Controller add-on runs as. Null when the add-on is off."
+  value       = var.application_gateway_ingress_controller == null ? null : module.aks.ingress_app_object_id
+}
+
 output "fqdn" {
   description = "Public FQDN of the API server. Null for a private cluster without a public FQDN."
   value       = module.aks.fqdn

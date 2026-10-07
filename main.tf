@@ -37,13 +37,21 @@ data "azurerm_subnet" "api_server" {
   virtual_network_name = var.virtual_network_name
 }
 
-# The public zone the Gateway's hostnames are published in. It exists already, like the network; the
-# cluster is only given access to it. The Key Vault, by contrast, is created here - see key_vault.tf.
+# The public zone the Gateway's hostnames are published in. Either it exists already, like the
+# network, and the cluster is only given access to it - or, with dns_zone_create, it is created here,
+# and the domain's registrar is pointed at the name servers the dns_zone_name_servers output lists.
 data "azurerm_dns_zone" "this" {
-  count = var.dns_zone_name == null ? 0 : 1
+  count = var.dns_zone_name != null && !var.dns_zone_create ? 1 : 0
 
   name                = var.dns_zone_name
-  resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
+  resource_group_name = local.dns_zone_resource_group_name
+}
+
+resource "azurerm_dns_zone" "this" {
+  count = var.dns_zone_name != null && var.dns_zone_create ? 1 : 0
+
+  name                = var.dns_zone_name
+  resource_group_name = local.dns_zone_resource_group_name
 }
 
 data "azurerm_private_dns_zone" "this" {
@@ -344,7 +352,7 @@ resource "azurerm_role_assignment" "external_dns" {
   count = var.create_role_assignments && var.dns_zone_name != null ? 1 : 0
 
   principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
-  scope                = data.azurerm_dns_zone.this[0].id
+  scope                = local.dns_zone_id
   role_definition_name = "DNS Zone Contributor"
   principal_type       = "ServicePrincipal"
 }

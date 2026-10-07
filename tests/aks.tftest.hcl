@@ -44,6 +44,11 @@ mock_provider "azurerm" {
       id = "/subscriptions/55555555-5555-5555-5555-555555555555/resourceGroups/rg-dns/providers/Microsoft.Network/dnsZones/contoso.com"
     }
   }
+  mock_resource "azurerm_dns_zone" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/dnsZones/contoso.com"
+    }
+  }
   mock_resource "azurerm_user_assigned_identity" {
     defaults = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-test-identity"
@@ -2660,6 +2665,50 @@ run "external_dns_writes_the_zone_as_its_service_account" {
     ])
     error_message = "external-dns should be federated with its own service account and contribute to the zone, which defaults to the cluster's resource group."
   }
+}
+
+run "zone_can_be_created_here" {
+  command = plan
+
+  # A created zone's ID is known only once it exists.
+  override_resource {
+    target          = azurerm_dns_zone.this[0]
+    override_during = plan
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/dnsZones/contoso.com"
+    }
+  }
+
+  variables {
+    dns_zone_name   = "contoso.com"
+    dns_zone_create = true
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      length(data.azurerm_dns_zone.this) == 0,
+      azurerm_dns_zone.this[0].name == "contoso.com",
+      azurerm_dns_zone.this[0].resource_group_name == "rg-aks-test",
+      azurerm_role_assignment.external_dns[0].scope == azurerm_dns_zone.this[0].id,
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_name == "contoso.com",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_subscription_id == "00000000-0000-0000-0000-000000000000",
+    ])
+    error_message = "With dns_zone_create the zone should be created in the cluster's resource group, granted to external-dns and handed to Flux, rather than looked up."
+  }
+}
+
+run "zone_creation_needs_a_zone_name" {
+  command = plan
+
+  variables {
+    dns_zone_create = true
+  }
+
+  expect_failures = [var.dns_zone_create]
 }
 
 run "vault_and_zone_grants_can_be_left_to_someone_else" {

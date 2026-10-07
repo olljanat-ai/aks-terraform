@@ -303,13 +303,28 @@ DESCRIPTION
   }
 }
 
+variable "dns_zone_create" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether the zone of `dns_zone_name` is created here rather than looked up. The domain's registrar
+then has to be pointed at the zone's name servers, which `dns_zone_name_servers` lists, before
+anything published in it resolves.
+DESCRIPTION
+  nullable    = false
+  validation {
+    condition     = !var.dns_zone_create || var.dns_zone_name != null
+    error_message = "dns_zone_create needs dns_zone_name to name the zone."
+  }
+}
+
 variable "dns_zone_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the existing public Azure DNS zone the cluster publishes its Gateway hostnames in, for
-example `contoso.com`. external-dns, deployed through Flux, keeps an A record in it for every
-hostname a Gateway listener serves, pointing at the Gateway's address - the private IP of the Azure
+Name of the public Azure DNS zone the cluster publishes its Gateway hostnames in, for example
+`contoso.com` - an existing one, unless `dns_zone_create` is set. external-dns, deployed through
+Flux, keeps an A record in it for every hostname a Gateway listener serves, pointing at the Gateway's address - the private IP of the Azure
 internal load balancer in front of Traefik, so the names resolve publicly to an address only
 reachable from inside the network. An
 identity is created for it here, federated with its Kubernetes service account and granted
@@ -320,7 +335,7 @@ DESCRIPTION
 variable "dns_zone_resource_group_name" {
   type        = string
   default     = null
-  description = "Resource group of the existing DNS zone. Defaults to `resource_group_name`."
+  description = "Resource group of the DNS zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
 }
 
 variable "enable_telemetry" {

@@ -493,6 +493,13 @@ check "entra_groups_are_granted_somewhere" {
 # on the network AKS manages has none to link it to - its network is created with the cluster, in
 # the node resource group - and the hostnames published in the zone resolve nowhere until someone
 # links it by hand.
+check "flux_github_webhook_has_a_vault_and_a_repository" {
+  assert {
+    condition     = !var.flux_github_webhook || local.flux_github_webhook_enabled
+    error_message = "${var.name} asks for a Flux GitHub webhook, but it has ${local.key_vault_enabled ? "no flux_git_repository to reconcile" : "no key_vault_name to keep its token in"}: no token is created."
+  }
+}
+
 check "internal_dns_zone_is_linked" {
   assert {
     condition     = !var.internal_dns_zone_create || local.byo_network

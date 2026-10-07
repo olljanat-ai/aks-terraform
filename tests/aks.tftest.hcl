@@ -2786,6 +2786,47 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
   }
 }
 
+run "flux_github_webhook_gets_a_token_and_flux_system_a_share" {
+  command = plan
+
+  variables {
+    key_vault_name      = "kv-aks-test"
+    flux_github_webhook = true
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_key_vault_secret.flux_github_webhook[0].name == "flux-system--github-webhook-token",
+      contains(keys(azurerm_user_assigned_identity.key_vault), "flux-system"),
+      azurerm_federated_identity_credential.key_vault["flux-system"].subject == "system:serviceaccount:flux-system:key-vault",
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_flux_system"),
+    ])
+    error_message = "A Flux GitHub webhook should get its token in the vault, and flux-system a share of the vault to read it with."
+  }
+}
+
+run "flux_github_webhook_without_a_vault_is_warned_about" {
+  command = plan
+
+  variables {
+    flux_github_webhook = true
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_key_vault_secret.flux_github_webhook) == 0
+    error_message = "No token should be created without a vault to keep it in."
+  }
+
+  expect_failures = [check.flux_github_webhook_has_a_vault_and_a_repository]
+}
+
 run "internal_zone_is_created_linked_and_written_by_a_second_service_account" {
   command = plan
 

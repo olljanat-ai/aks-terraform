@@ -103,3 +103,8 @@ flux_git_repository = {
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
   sync_interval_seconds = 60
 }
+
+# A GitHub push reaches the cluster at once: the platform repository publishes Flux's webhook
+# receiver (flux-webhook.onek8s.lol), and its token is created in the Key Vault here. Set the
+# repository's webhook to it once - see the README, "Flux".
+flux_github_webhook = true

@@ -470,6 +470,20 @@ DESCRIPTION
   }
 }
 
+variable "flux_github_webhook" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether the Flux repository publishes a GitHub webhook receiver, so a push reconciles at once rather
+than at the next poll. A token is generated for it and kept in the Key Vault as
+`flux-system--github-webhook-token`, and `flux-system` is given a share of the vault - its identity's
+client ID is passed to Flux as `key_vault_client_id_flux_system` - for the repository's Receiver to
+read it. The same token is set as the secret of the repository's webhook in GitHub. Needs
+`key_vault_name` and `flux_git_repository`.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "internal_dns_zone_create" {
   type        = bool
   default     = false

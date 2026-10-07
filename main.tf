@@ -48,6 +48,22 @@ data "azurerm_subnet" "application_gateway_for_containers" {
   virtual_network_name = var.virtual_network_name
 }
 
+# The Key Vault holding the listener certificates, and the public zone their hostnames are published
+# in. Both exist already, like the network; the cluster is only given access to them.
+data "azurerm_key_vault" "tls" {
+  count = var.key_vault_name == null ? 0 : 1
+
+  name                = var.key_vault_name
+  resource_group_name = coalesce(var.key_vault_resource_group_name, var.resource_group_name)
+}
+
+data "azurerm_dns_zone" "this" {
+  count = var.dns_zone_name == null ? 0 : 1
+
+  name                = var.dns_zone_name
+  resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
+}
+
 data "azurerm_private_dns_zone" "this" {
   count = local.use_byo_private_dns_zone ? 1 : 0
 
@@ -332,6 +348,80 @@ resource "azurerm_role_assignment" "application_gateway_for_containers_subnet" {
   principal_type       = "ServicePrincipal"
 }
 
+# Identities for the two workloads that publish through the Gateway on the cluster's behalf, each
+# federated with the one Kubernetes service account that acts as it - see local.*_service_account.
+# Named after the cluster identity with what they do appended, and created only for a vault or a
+# zone that is named.
+#
+# External Secrets Operator reads the listener certificates out of Key Vault with the first:
+# Application Gateway for Containers takes listener certificates from Kubernetes Secrets only.
+resource "azurerm_user_assigned_identity" "tls_certificates" {
+  count = var.key_vault_name == null ? 0 : 1
+
+  location            = var.location
+  name                = "${local.managed_identity_name}-tls"
+  resource_group_name = var.resource_group_name
+}
+
+resource "azurerm_federated_identity_credential" "tls_certificates" {
+  count = var.key_vault_name == null ? 0 : 1
+
+  name                      = "aks-${var.name}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.tls_certificates[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_profile_issuer_url
+  subject                   = local.tls_certificates_service_account
+}
+
+# A certificate's private key is only readable as the Key Vault secret behind it, so this is Secrets
+# User rather than Certificate User. It reads every secret in the vault - keep the vault to the
+# certificates the cluster serves.
+resource "azurerm_role_assignment" "tls_certificates" {
+  count = var.create_role_assignments && var.key_vault_name != null ? 1 : 0
+
+  principal_id         = azurerm_user_assigned_identity.tls_certificates[0].principal_id
+  scope                = data.azurerm_key_vault.tls[0].id
+  role_definition_name = "Key Vault Secrets User"
+  principal_type       = "ServicePrincipal"
+}
+
+# external-dns keeps a CNAME in the zone for every hostname a Gateway listener serves.
+resource "azurerm_user_assigned_identity" "external_dns" {
+  count = var.dns_zone_name == null ? 0 : 1
+
+  location            = var.location
+  name                = "${local.managed_identity_name}-dns"
+  resource_group_name = var.resource_group_name
+}
+
+resource "azurerm_federated_identity_credential" "external_dns" {
+  count = var.dns_zone_name == null ? 0 : 1
+
+  name                      = "aks-${var.name}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.external_dns[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_profile_issuer_url
+  subject                   = local.external_dns_service_account
+}
+
+resource "azurerm_role_assignment" "external_dns" {
+  count = var.create_role_assignments && var.dns_zone_name != null ? 1 : 0
+
+  principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
+  scope                = data.azurerm_dns_zone.this[0].id
+  role_definition_name = "DNS Zone Contributor"
+  principal_type       = "ServicePrincipal"
+}
+
+# The certificate identity is granted an Azure RBAC role on the vault, which a vault on the legacy
+# access policy model does not consult: the grant is made and every read is still refused.
+check "key_vault_uses_azure_rbac" {
+  assert {
+    condition     = var.key_vault_name == null || try(data.azurerm_key_vault.tls[0].rbac_authorization_enabled, true)
+    error_message = "Key Vault ${coalesce(var.key_vault_name, "-")} uses access policies rather than Azure RBAC, so the Key Vault Secrets User role granted to ${local.managed_identity_name}-tls is never consulted and the listener certificates cannot be read. Switch the vault to the Azure RBAC permission model, or give that identity Get on secrets in an access policy."
+  }
+}
+
 # Application Gateway for Containers needs a delegated subnet to join. AKS creates one for a cluster
 # that brings no network; a cluster in an existing network has to be given one, or the add-on is
 # installed and every ApplicationLoadBalancer defined in the cluster fails to provision. Terraform
@@ -570,7 +660,7 @@ resource "azapi_resource" "flux_configuration" {
           prune                  = true
           syncIntervalInSeconds  = var.flux_git_repository.sync_interval_seconds
           retryIntervalInSeconds = 900
-          postBuild = length(local.flux_cluster_settings) == 0 ? null : {
+          postBuild = {
             substitute = local.flux_cluster_settings
           }
         }

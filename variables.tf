@@ -326,6 +326,24 @@ DESCRIPTION
   }
 }
 
+variable "dns_zone_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of the existing public Azure DNS zone the cluster publishes its Gateway hostnames in, for
+example `contoso.com`. external-dns, deployed through Flux, keeps a CNAME in it for every hostname a
+Gateway listener serves, pointing at the Gateway's Application Gateway for Containers frontend. An
+identity is created for it here, federated with its Kubernetes service account and granted
+`DNS Zone Contributor` on the zone. Leave it unset and nothing is published.
+DESCRIPTION
+}
+
+variable "dns_zone_resource_group_name" {
+  type        = string
+  default     = null
+  description = "Resource group of the existing DNS zone. Defaults to `resource_group_name`."
+}
+
 variable "enable_telemetry" {
   type        = bool
   default     = true
@@ -456,6 +474,25 @@ DESCRIPTION
     condition     = var.flux_git_repository == null || try(var.flux_git_repository.sync_interval_seconds >= 60, false)
     error_message = "flux_git_repository.sync_interval_seconds must be at least 60."
   }
+}
+
+variable "key_vault_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of the existing Azure Key Vault the TLS certificates of the Gateway listeners are kept in.
+Application Gateway for Containers reads listener certificates from Kubernetes Secrets only, so
+External Secrets Operator, deployed through Flux, syncs each certificate into one. An identity is
+created for it here, federated with its Kubernetes service account and granted
+`Key Vault Secrets User` on the vault - which therefore has to use the Azure RBAC permission model.
+Leave it unset and no certificate is synced.
+DESCRIPTION
+}
+
+variable "key_vault_resource_group_name" {
+  type        = string
+  default     = null
+  description = "Resource group of the existing Key Vault. Defaults to `resource_group_name`."
 }
 
 variable "kubernetes_version" {

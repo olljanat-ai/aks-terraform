@@ -23,6 +23,15 @@ virtual_network_resource_group_name = "rg-network"
 # the rest of the network; the add-on identity is granted Network Contributor on it.
 application_gateway_for_containers_subnet_name = "snet-aks-alb"
 
+# Where the Gateway's listener certificates are kept and its hostnames published. Both exist already;
+# the cluster gets an identity for each, federated with the service account that uses it, and the
+# Flux repository is told where they are. The vault has to use the Azure RBAC permission model.
+# TODO: name the vault and the zone.
+# key_vault_name                = "kv-..."
+# key_vault_resource_group_name = "rg-..."
+# dns_zone_name                 = "contoso.com"
+# dns_zone_resource_group_name  = "rg-..."
+
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 # private_dns_zone_resource_group_name = "rg-network"

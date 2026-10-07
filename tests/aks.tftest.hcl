@@ -57,21 +57,15 @@ override_module {
   outputs = {
     resource_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test"
     oidc_issuer_profile_issuer_url = "https://swedencentral.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/11111111-1111-1111-1111-111111111111/"
-    ingress_profile_application_load_balancer_identity = {
-      clientId   = "33333333-3333-3333-3333-333333333333"
-      objectId   = "44444444-4444-4444-4444-444444444444"
-      resourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/MC_rg-aks-test_aks-test_swedencentral/providers/Microsoft.ManagedIdentity/userAssignedIdentities/applicationloadbalancer-aks-test"
-    }
   }
 }
 
 variables {
-  application_gateway_for_containers_subnet_name = "snet-aks-alb"
-  location                                       = "swedencentral"
-  name                                           = "aks-test"
-  node_subnet_name                               = "snet-aks-nodes"
-  resource_group_name                            = "rg-aks-test"
-  virtual_network_name                           = "vnet-aks-test"
+  location             = "swedencentral"
+  name                 = "aks-test"
+  node_subnet_name     = "snet-aks-nodes"
+  resource_group_name  = "rg-aks-test"
+  virtual_network_name = "vnet-aks-test"
 }
 
 # ----------------------------------------------------------------------------------------------
@@ -556,11 +550,10 @@ run "an_automatic_cluster_gets_flux_too" {
   command = plan
 
   variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
+    sku_name             = "Automatic"
+    sku_tier             = "Standard"
+    virtual_network_name = null
+    node_subnet_name     = null
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
@@ -1134,12 +1127,11 @@ run "a_cluster_without_a_network_looks_nothing_up_and_grants_nothing" {
   command = plan
 
   variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
-    api_server_vnet_integration_enabled            = false
+    sku_name                            = "Automatic"
+    sku_tier                            = "Standard"
+    virtual_network_name                = null
+    node_subnet_name                    = null
+    api_server_vnet_integration_enabled = false
   }
 
   assert {
@@ -1175,14 +1167,13 @@ run "a_cluster_without_a_network_raises_none_of_the_network_warnings" {
   command = plan
 
   variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
-    api_server_vnet_integration_enabled            = false
-    private_cluster_enabled                        = false
-    api_server_authorized_ip_ranges                = ["203.0.113.0/24"]
+    sku_name                            = "Automatic"
+    sku_tier                            = "Standard"
+    virtual_network_name                = null
+    node_subnet_name                    = null
+    api_server_vnet_integration_enabled = false
+    private_cluster_enabled             = false
+    api_server_authorized_ip_ranges     = ["203.0.113.0/24"]
   }
 
   assert {
@@ -1197,11 +1188,10 @@ run "automatic_without_a_network_needs_no_system_node_subnet" {
   command = plan
 
   variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
+    sku_name             = "Automatic"
+    sku_tier             = "Standard"
+    virtual_network_name = null
+    node_subnet_name     = null
   }
 
   assert {
@@ -1215,9 +1205,8 @@ run "base_without_a_network_sends_no_node_subnet" {
   command = plan
 
   variables {
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
+    virtual_network_name = null
+    node_subnet_name     = null
   }
 
   assert {
@@ -1241,8 +1230,7 @@ run "rejects_a_node_subnet_without_a_virtual_network" {
   command = plan
 
   variables {
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
+    virtual_network_name = null
   }
 
   expect_failures = [var.node_subnet_name]
@@ -1252,12 +1240,11 @@ run "rejects_a_system_node_subnet_without_a_virtual_network" {
   command = plan
 
   variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
-    system_node_subnet_name                        = "snet-aks-system"
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    virtual_network_name    = null
+    node_subnet_name        = null
+    system_node_subnet_name = "snet-aks-system"
   }
 
   expect_failures = [var.system_node_subnet_name]
@@ -1267,10 +1254,9 @@ run "rejects_an_api_server_subnet_without_a_virtual_network" {
   command = plan
 
   variables {
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
-    api_server_subnet_name                         = "snet-aks-apiserver"
+    virtual_network_name   = null
+    node_subnet_name       = null
+    api_server_subnet_name = "snet-aks-apiserver"
   }
 
   expect_failures = [var.api_server_subnet_name]
@@ -1283,11 +1269,10 @@ run "automatic_without_a_network_runs_on_a_system_assigned_identity" {
   command = plan
 
   variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
+    sku_name             = "Automatic"
+    sku_tier             = "Standard"
+    virtual_network_name = null
+    node_subnet_name     = null
   }
 
   assert {
@@ -1325,9 +1310,8 @@ run "base_without_a_network_keeps_the_user_assigned_identity" {
   command = plan
 
   variables {
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
+    virtual_network_name = null
+    node_subnet_name     = null
   }
 
   assert {
@@ -1343,13 +1327,12 @@ run "warns_about_a_byo_private_dns_zone_with_no_identity_to_grant_it" {
   command = plan
 
   variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
-    private_cluster_enabled                        = true
-    private_dns_zone_name                          = "privatelink.swedencentral.azmk8s.io"
+    sku_name                = "Automatic"
+    sku_tier                = "Standard"
+    virtual_network_name    = null
+    node_subnet_name        = null
+    private_cluster_enabled = true
+    private_dns_zone_name   = "privatelink.swedencentral.azmk8s.io"
   }
 
   expect_failures = [check.byo_private_dns_zone_has_an_identity_to_grant]
@@ -1370,10 +1353,9 @@ run "a_cluster_without_a_network_still_grants_the_private_dns_zone" {
   command = plan
 
   variables {
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
-    private_dns_zone_name                          = "privatelink.swedencentral.azmk8s.io"
+    virtual_network_name  = null
+    node_subnet_name      = null
+    private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
   }
 
   assert {
@@ -2460,130 +2442,18 @@ run "rejects_an_estate_wide_pod_security_level_kubernetes_does_not_have" {
   expect_failures = [var.managed_namespace_defaults]
 }
 
-# ----------------------------------------------------------------------------------------------
-# Application Gateway for Containers
-# ----------------------------------------------------------------------------------------------
-
-run "the_add_on_identity_is_granted_the_subnet_it_joins" {
-  command = plan
-
-  variables {
-    application_gateway_for_containers_subnet_name = "snet-aks-alb"
-  }
-
-  assert {
-    condition = alltrue([
-      length(azurerm_role_assignment.application_gateway_for_containers_subnet) == 1,
-      azurerm_role_assignment.application_gateway_for_containers_subnet[0].principal_id == "44444444-4444-4444-4444-444444444444",
-      azurerm_role_assignment.application_gateway_for_containers_subnet[0].role_definition_name == "Network Contributor",
-    ])
-    error_message = "The add-on identity should be granted Network Contributor on the subnet Application Gateway for Containers joins."
-  }
-}
-
-run "no_subnet_grant_is_left_to_someone_else" {
-  command = plan
-
-  variables {
-    application_gateway_for_containers_subnet_name = "snet-aks-alb"
-    create_role_assignments                        = false
-  }
-
-  assert {
-    condition     = length(azurerm_role_assignment.application_gateway_for_containers_subnet) == 0
-    error_message = "With create_role_assignments = false the subnet grant belongs to whoever manages the estate's role assignments."
-  }
-}
-
-run "warns_when_a_cluster_in_an_existing_network_has_no_subnet_for_the_gateway" {
-  command = plan
-
-  variables {
-    application_gateway_for_containers_subnet_name = null
-  }
-
-  expect_failures = [check.application_gateway_for_containers_has_a_subnet]
-}
-
-run "a_cluster_without_a_network_needs_no_subnet_for_the_gateway" {
-  command = plan
-
-  variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    application_gateway_for_containers_subnet_name = null
-    node_subnet_name                               = null
-    api_server_vnet_integration_enabled            = false
-  }
-
-  assert {
-    condition     = length(azurerm_role_assignment.application_gateway_for_containers_subnet) == 0
-    error_message = "A cluster that brings no network uses the subnet AKS creates for the gateway, and grants nothing."
-  }
-}
-
-run "refuses_a_gateway_subnet_for_a_cluster_without_a_network" {
-  command = plan
-
-  variables {
-    sku_name                                       = "Automatic"
-    sku_tier                                       = "Standard"
-    virtual_network_name                           = null
-    node_subnet_name                               = null
-    api_server_vnet_integration_enabled            = false
-    application_gateway_for_containers_subnet_name = "snet-aks-alb"
-  }
-
-  expect_failures = [var.application_gateway_for_containers_subnet_name]
-}
-
-run "refuses_the_node_subnet_as_the_gateway_subnet" {
-  command = plan
-
-  variables {
-    application_gateway_for_containers_subnet_name = "snet-aks-nodes"
-  }
-
-  expect_failures = [var.application_gateway_for_containers_subnet_name]
-}
-
-run "flux_is_told_where_the_gateway_subnet_is" {
-  command = plan
-
-  variables {
-    flux_git_repository = {
-      url  = "https://github.com/example/cluster-config"
-      path = "./clusters/aks-test"
-    }
-  }
-
-  assert {
-    condition = alltrue([
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.agc_subnet_id == data.azurerm_subnet.application_gateway_for_containers[0].id,
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.agc_subnet_cidr == data.azurerm_subnet.application_gateway_for_containers[0].address_prefixes[0],
-    ])
-    error_message = "The platform Kustomization should be given the ID and range of the Application Gateway for Containers subnet."
-  }
-}
-
 run "flux_is_told_nothing_it_has_no_value_for" {
   command = plan
 
   variables {
-    application_gateway_for_containers_subnet_name = null
     flux_git_repository = {
       url  = "https://github.com/example/cluster-config"
       path = "./clusters/aks-test"
     }
   }
 
-  expect_failures = [check.application_gateway_for_containers_has_a_subnet]
-
   assert {
     condition = alltrue([
-      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "agc_subnet_id"),
-      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "agc_subnet_cidr"),
       !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "tls_key_vault_url"),
       !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "dns_zone_name"),
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.cluster_name == "aks-test",

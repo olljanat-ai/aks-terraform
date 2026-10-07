@@ -39,9 +39,7 @@ These must exist before running Terraform:
   - for AKS Automatic, a subnet for the hosted system components, which must be a different subnet
     from the node one;
   - a subnet delegated to `Microsoft.ContainerService/managedClusters` and at least a `/28`, only
-    while [API Server VNet Integration](#api-server-vnet-integration) is in use;
-  - a subnet delegated to `Microsoft.ServiceNetworking/trafficControllers` and exactly a `/24`, for
-    [Application Gateway for Containers](#ingress-through-the-gateway-api).
+    while [API Server VNet Integration](#api-server-vnet-integration) is in use.
 
   See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
@@ -57,16 +55,12 @@ The identity running Terraform needs `Contributor` on the resource group and, un
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
 private DNS zone.
 
-Every cluster runs the Application Gateway for Containers add-on, which is in **preview**. The
-subscription needs its preview features and resource providers registered first:
+Every cluster runs the managed Gateway API CRDs, which are in **preview**. The subscription needs the
+preview feature registered first:
 
 ```sh
 az feature register --namespace Microsoft.ContainerService --name ManagedGatewayAPIPreview
-az feature register --namespace Microsoft.ContainerService --name ApplicationLoadBalancerPreview
 az provider register --namespace Microsoft.ContainerService
-az provider register --namespace Microsoft.Network
-az provider register --namespace Microsoft.NetworkFunction
-az provider register --namespace Microsoft.ServiceNetworking
 ```
 
 The `Microsoft.PolicyInsights` resource provider should be **registered in the subscription**, since
@@ -466,8 +460,8 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 ## Monitoring and ingress
 
 Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
-Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Application Gateway
-for Containers - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Traefik Hub API
+Gateway behind an Azure internal load balancer - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
 otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
@@ -477,6 +471,7 @@ otherwise duplicate them are off on every cluster, with no variable to turn them
 | Control plane [diagnostic setting][diagnostics] | Ships the API server, audit and autoscaler logs to a Log Analytics workspace. |
 | [Defender for Containers][defender] | Runs the Defender security agent on the nodes for threat detection. |
 | [Application Routing][approuting] (`webAppRouting`) | Installs and manages the default NGINX ingress controller, or an Istio based Gateway API implementation. |
+| [Application Gateway for Containers][agcaddon] (`applicationLoadBalancer`) | Runs the ALB Controller add-on, which programs an Azure-hosted, public Gateway API load balancer. |
 
 Most of them are stated as disabled rather than simply left unconfigured, because Azure turns them
 on by itself otherwise: **AKS Automatic** creates a cluster with Container Insights, managed
@@ -510,52 +505,41 @@ reported on. AKS Automatic always runs it.
 
 ## Ingress through the Gateway API
 
-Every cluster publishes its workloads through [Application Gateway for Containers][agc] (AGC), the
-Azure load balancer for the [Kubernetes Gateway API][gatewayapi]. The proxies are an Azure resource
-outside the cluster rather than pods inside it, and the cluster runs only the controller that
-programs them:
+Every cluster publishes its workloads through the [Kubernetes Gateway API][gatewayapi]. What this
+configuration provides is the API itself; the controller serving it is deployed through
+[Flux](#gitops-with-flux):
 
 | Setting | What it does |
 | --- | --- |
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
-| `ingressProfile.applicationLoadBalancer.enabled = true` | The [ALB Controller add-on][agcaddon]: the controller in `kube-system` and the `azure-alb-external` GatewayClass. |
-| `securityProfile.workloadIdentity.enabled = true` | Workload identity, which the controller authenticates to Azure with. |
+| `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on the `2025-09-02-preview` API, the only one that knows the setting. |
 
-The add-on is in **preview** - see [Prerequisites](#prerequisites) for the features to register - and
-asking for it moves the cluster to the `2025-09-02-preview` API, the one the module sends it on.
+The Flux repository runs [Traefik Hub API Gateway][traefikhub], which provides the `traefik`
+GatewayClass, behind a `LoadBalancer` Service annotated
+`service.beta.kubernetes.io/azure-load-balancer-internal: "true"`. AKS creates an
+[internal load balancer][ilb] for it, in the node resource group, with a private frontend IP:
 
-AKS creates an identity for the controller, `applicationloadbalancer-<cluster>` in the node resource
-group, with its rights there already granted. What it lacks is the subnet the load balancer joins
-to reach the pods:
+- **In an existing network**, the frontend is in the node subnet. The cluster identity already holds
+  `Network Contributor` there, which is all AKS needs - no subnet of its own, no delegation and no
+  further grant.
+- **Without a network of its own**, it is in the network AKS creates for the cluster.
 
-- **In an existing network**, that is `application_gateway_for_containers_subnet_name`: a subnet of
-  its own, delegated to `Microsoft.ServiceNetworking/trafficControllers`, and exactly a `/24` - the
-  only size AGC supports on Azure CNI Overlay. It has to be in the cluster's own virtual network,
-  not a peered one. Terraform grants the controller identity `Network Contributor` on it once the
-  cluster exists, and warns on every plan for a cluster in an existing network that names none.
-- **Without a network of its own**, AKS creates the subnet, `aks-appgateway`, and there is nothing
-  to name or grant.
-
-Nothing here creates the load balancer itself. It is defined through [Flux](#gitops-with-flux) as an
-`ApplicationLoadBalancer` that names the subnet - the `application_gateway_for_containers_subnet_id`
-output - and the controller creates the AGC resource in the node resource group to match. The
-Gateways, their listeners and their TLS certificates are defined there as well.
-
-Traffic reaches the pods from addresses in that subnet, not from a namespace inside the cluster, so
-a managed namespace that keeps its default closed ingress has to let the subnet's range in with a
+Either way the Gateway is reachable from inside the virtual network - and whatever is peered or
+connected to it - only. Traffic reaches the pods from the Traefik pods inside the cluster, so a
+managed namespace that keeps its default closed ingress lets the `traefik` namespace in with a
 `NetworkPolicy` of its own.
 
 ### Certificates and DNS
 
-Application Gateway for Containers terminates TLS with certificates it reads from Kubernetes
-Secrets, and has no Key Vault or DNS integration of its own - AKS's, through the App Routing
-operator, serves the Istio based GatewayClasses only. So both are done from inside the cluster, by
+The Gateway terminates TLS with certificates it reads from Kubernetes Secrets, and Traefik has no Key
+Vault or Azure DNS integration of its own - AKS's, through the App Routing operator, serves the Istio
+based GatewayClasses only. So both are done from inside the cluster, by
 workloads the Flux repository deploys, each acting as an identity created here:
 
 | Variable | Identity | Federated with | Granted |
 | --- | --- | --- | --- |
 | `key_vault_name` | `<cluster identity>-tls` | `ingress-gateway/keyvault-certificates` - External Secrets Operator syncs each certificate into the listener's Secret | `Key Vault Secrets User` on the vault |
-| `dns_zone_name` | `<cluster identity>-dns` | `external-dns/external-dns` - keeps a CNAME per listener hostname, pointing at the Gateway's AGC frontend | `DNS Zone Contributor` on the zone |
+| `dns_zone_name` | `<cluster identity>-dns` | `external-dns/external-dns` - keeps an A record per listener hostname, pointing at the Gateway's internal load balancer IP | `DNS Zone Contributor` on the zone |
 
 Both already exist and are only looked up, in `resource_group_name` unless
 `key_vault_resource_group_name` and `dns_zone_resource_group_name` say otherwise. Leave either
@@ -568,12 +552,14 @@ unset and that half is not set up at all.
   cluster serves.
 - **The vault has to use Azure RBAC.** One on access policies never consults the role assignment,
   and Terraform warns on every plan for it.
-- **A hostname cannot be the zone apex**, since the record is a CNAME.
+- **The zone answers with a private address.** A public zone then tells anyone who asks the
+  internal IP of the Gateway, which only resolves to something reachable from inside the network.
 
-[agc]: https://learn.microsoft.com/azure/application-gateway/for-containers/overview
 [agcaddon]: https://learn.microsoft.com/azure/application-gateway/for-containers/quickstart-deploy-application-gateway-for-containers-alb-controller-addon
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
+[ilb]: https://learn.microsoft.com/azure/aks/internal-lb
 [managedgw]: https://learn.microsoft.com/azure/aks/managed-gateway-api
+[traefikhub]: https://doc.traefik.io/traefik-hub/api-gateway/intro
 
 ## GitOps with Flux
 
@@ -598,14 +584,11 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 
 | Variable | Value |
 | --- | --- |
-| `agc_subnet_id` | Resource ID of `application_gateway_for_containers_subnet_name`, for the `ApplicationLoadBalancer`. |
-| `agc_subnet_cidr` | Its address range, for the `NetworkPolicy`s that let Application Gateway for Containers reach the pods. |
 | `tls_key_vault_url`, `tls_identity_client_id` | The vault of `key_vault_name` and the identity that reads it. |
 | `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id`, `dns_identity_client_id` | The zone of `dns_zone_name` and the identity that writes it. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 
-A variable the cluster has no value for - the subnet's, on a cluster that brings no network, or
-those of a vault or zone that is not named - is left out rather than sent empty. They apply to what `path` holds itself; the repository passes them
+A variable the cluster has no value for - those of a vault or zone that is not named - is left out rather than sent empty. They apply to what `path` holds itself; the repository passes them
 on from there to whatever needs them.
 
 [postbuild]: https://fluxcd.io/flux/components/kustomize/kustomizations/#post-build-variable-substitution

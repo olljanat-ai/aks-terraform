@@ -31,12 +31,6 @@ locals {
       cluster_name    = var.name
       azure_tenant_id = data.azurerm_client_config.current.tenant_id
     },
-    # The subnet Application Gateway for Containers joins, for the ApplicationLoadBalancer that
-    # creates it, and its range, for the NetworkPolicies that let it reach the pods.
-    var.application_gateway_for_containers_subnet_name == null ? {} : {
-      agc_subnet_id   = data.azurerm_subnet.application_gateway_for_containers[0].id
-      agc_subnet_cidr = data.azurerm_subnet.application_gateway_for_containers[0].address_prefixes[0]
-    },
     # The Key Vault the listener certificates are synced from, and the identity that reads it.
     var.key_vault_name == null ? {} : {
       tls_key_vault_url      = data.azurerm_key_vault.tls[0].vault_uri

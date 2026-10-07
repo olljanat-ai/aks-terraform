@@ -49,6 +49,11 @@ mock_provider "azurerm" {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/dnsZones/contoso.com"
     }
   }
+  mock_resource "azurerm_private_dns_zone" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/privateDnsZones/internal.contoso.com"
+    }
+  }
   mock_resource "azurerm_user_assigned_identity" {
     defaults = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-test-identity"
@@ -2778,5 +2783,105 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_subscription_id == "55555555-5555-5555-5555-555555555555",
     ])
     error_message = "The platform Kustomization should be told the vault URL, each namespace's identity and where the zone is."
+  }
+}
+
+run "internal_zone_is_created_linked_and_written_by_a_second_service_account" {
+  command = plan
+
+  # A created zone's ID is known only once it exists.
+  override_resource {
+    target          = azurerm_private_dns_zone.internal[0]
+    override_during = plan
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/privateDnsZones/internal.contoso.com"
+    }
+  }
+
+  variables {
+    dns_zone_name            = "contoso.com"
+    internal_dns_zone_name   = "internal.contoso.com"
+    internal_dns_zone_create = true
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      length(data.azurerm_private_dns_zone.internal) == 0,
+      azurerm_private_dns_zone.internal[0].name == "internal.contoso.com",
+      azurerm_private_dns_zone.internal[0].resource_group_name == "rg-aks-test",
+      azurerm_private_dns_zone_virtual_network_link.internal[0].virtual_network_id == data.azurerm_virtual_network.this[0].id,
+      azurerm_private_dns_zone_virtual_network_link.internal[0].registration_enabled == false,
+      length(azurerm_user_assigned_identity.external_dns) == 1,
+      azurerm_federated_identity_credential.external_dns[0].subject == "system:serviceaccount:external-dns:external-dns",
+      azurerm_federated_identity_credential.external_dns_internal[0].subject == "system:serviceaccount:external-dns:external-dns-internal",
+      azurerm_role_assignment.external_dns_internal[0].role_definition_name == "Private DNS Zone Contributor",
+      azurerm_role_assignment.external_dns_internal[0].scope == azurerm_private_dns_zone.internal[0].id,
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_name == "internal.contoso.com",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_resource_group_name == "rg-aks-test",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_subscription_id == "00000000-0000-0000-0000-000000000000",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_name == "contoso.com",
+    ])
+    error_message = "A private zone created here should be linked to the cluster's network, written by external-dns's identity through its own service account, and handed to Flux next to the public one."
+  }
+}
+
+run "internal_zone_alone_still_gets_external_dns_an_identity" {
+  command = plan
+
+  variables {
+    internal_dns_zone_name                = "internal.contoso.com"
+    internal_dns_zone_resource_group_name = "rg-dns"
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      data.azurerm_private_dns_zone.internal[0].resource_group_name == "rg-dns",
+      length(azurerm_private_dns_zone.internal) == 0,
+      length(azurerm_private_dns_zone_virtual_network_link.internal) == 0,
+      length(azurerm_user_assigned_identity.external_dns) == 1,
+      length(azurerm_federated_identity_credential.external_dns) == 0,
+      length(azurerm_role_assignment.external_dns) == 0,
+      length(azurerm_federated_identity_credential.external_dns_internal) == 1,
+      azurerm_role_assignment.external_dns_internal[0].scope == data.azurerm_private_dns_zone.internal[0].id,
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "dns_zone_name"),
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "dns_identity_client_id"),
+    ])
+    error_message = "An existing private zone on its own should be looked up and granted, not created or linked, and external-dns still be given its identity."
+  }
+}
+
+run "internal_zone_creation_needs_a_zone_name" {
+  command = plan
+
+  variables {
+    internal_dns_zone_create = true
+  }
+
+  expect_failures = [var.internal_dns_zone_create]
+}
+
+run "warns_about_a_created_internal_zone_with_no_network_to_link" {
+  command = plan
+
+  variables {
+    virtual_network_name     = null
+    node_subnet_name         = null
+    internal_dns_zone_name   = "internal.contoso.com"
+    internal_dns_zone_create = true
+  }
+
+  expect_failures = [check.internal_dns_zone_is_linked]
+
+  assert {
+    condition     = length(azurerm_private_dns_zone_virtual_network_link.internal) == 0
+    error_message = "A cluster on the network AKS manages has no network to link the zone to."
   }
 }

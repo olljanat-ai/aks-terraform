@@ -470,6 +470,41 @@ DESCRIPTION
   }
 }
 
+variable "internal_dns_zone_create" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether the private zone of `internal_dns_zone_name` is created here rather than looked up. A zone
+created here is linked to the cluster's virtual network - which takes one, see
+`virtual_network_name` - so that it resolves inside it.
+DESCRIPTION
+  nullable    = false
+  validation {
+    condition     = !var.internal_dns_zone_create || var.internal_dns_zone_name != null
+    error_message = "internal_dns_zone_create needs internal_dns_zone_name to name the zone."
+  }
+}
+
+variable "internal_dns_zone_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of an Azure Private DNS zone the cluster also publishes its Gateway hostnames in, for example
+`internal.contoso.com` - an existing one, unless `internal_dns_zone_create` is set. Its names
+resolve only in the networks the zone is linked to. A second external-dns release, deployed through
+Flux, keeps an A record in it for every hostname a Gateway listener serves in it, pointing at the
+same internal load balancer as the public ones. It writes as the identity created for external-dns,
+through a federated credential of its own, and the identity is granted `Private DNS Zone
+Contributor` on the zone. Leave it unset and nothing is published privately.
+DESCRIPTION
+}
+
+variable "internal_dns_zone_resource_group_name" {
+  type        = string
+  default     = null
+  description = "Resource group of the private zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
+}
+
 variable "key_vault_name" {
   type        = string
   default     = null

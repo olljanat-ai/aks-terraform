@@ -30,6 +30,12 @@ key_vault_name = "kv-proto-aks-free"
 dns_zone_name   = "onek8s.lol"
 dns_zone_create = true
 
+# The same hostnames, privately: an Azure Private DNS zone created here, in resource_group_name, and
+# linked to the network above. external-dns publishes the listener hostnames that are in it, and
+# they resolve only inside the network.
+internal_dns_zone_name   = "internal.onek8s.lol"
+internal_dns_zone_create = true
+
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 # private_dns_zone_resource_group_name = "rg-network"

@@ -48,13 +48,18 @@ These must exist before running Terraform:
 - The public **Azure DNS zone** the Gateway's hostnames are published in - only where
   `dns_zone_name` names it, and not when `dns_zone_create` has it created here. See [Certificates and DNS](#certificates-and-dns). The Key Vault is not a
   prerequisite: it is created here - see [Key Vault](#key-vault).
+- The **Azure Private DNS zone** the same hostnames are published in privately - only where
+  `internal_dns_zone_name` names it, and not when `internal_dns_zone_create` has it created here
+  (and linked to the virtual network). An existing one has to be linked to the networks that
+  should resolve it already.
 
 `envs/prototype-automatic.tfvars` needs none of the network pieces: it names a resource group and
 nothing else about the existing estate. `envs/prototype-free.tfvars` needs all of them.
 
 The identity running Terraform needs `Contributor` on the resource group and, unless
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
-private DNS zone.
+private DNS zone. Linking a private zone created here (`internal_dns_zone_create`) to the network
+also takes `Microsoft.Network/virtualNetworks/join/action` on it - `Network Contributor` has it.
 
 Every cluster runs the managed Gateway API CRDs, which are in **preview**. The subscription needs the
 preview feature registered first:
@@ -550,8 +555,10 @@ deploys, each acting as an identity created here:
   certificate as PKCS#12 - so a certificate is imported as a `.pfx`, never as PEM. A new version is
   picked up within the hour.
 
-  The `https-example` listener's certificate, `ingress-gateway--hello-example`, is issued and renewed
-  by the [Renew Certificate](.github/workflows/renew-certificate.yml) workflow: Let's Encrypt, with
+  The `https-example` listener's certificate, `ingress-gateway--hello-example` (hello.onek8s.lol),
+  and the `https-traefik` listener's - Traefik's dashboard - `ingress-gateway--traefik-dashboard`
+  (traefik.onek8s.lol), are issued and renewed by the
+  [Renew Certificate](.github/workflows/renew-certificate.yml) workflow, one job each: Let's Encrypt, with
   the DNS-01 challenge solved in the environment's `dns_zone_name`, imported into its
   `key_vault_name` - both read from `envs/<environment>.tfvars`. It runs monthly for
   `prototype-free` and renews when fewer than 30 days are left; run it by hand for another
@@ -569,6 +576,17 @@ deploys, each acting as an identity created here:
   registrar delegates to it: set the domain's NS records to the `dns_zone_name_servers` output
   (`terraform output dns_zone_name_servers`). **The zone answers with a private address**: a public zone then tells anyone who asks
   the internal IP of the Gateway, which only resolves to something reachable from inside the network.
+- **Private DNS**: with `internal_dns_zone_name` set, the same identity is also federated with
+  `external-dns/external-dns-internal` - a second external-dns release, since its Azure provider
+  writes public or private zones, never both - and granted `Private DNS Zone Contributor` on that
+  Azure Private DNS zone. It keeps the same A records for the listener hostnames in that zone, and
+  they resolve only in the networks the zone is linked to. The zone is looked up in
+  `resource_group_name` unless `internal_dns_zone_resource_group_name` says otherwise - or, with
+  `internal_dns_zone_create = true`, created there and linked to the cluster's virtual network
+  (which takes one: a cluster on the network AKS manages has nothing to link it to, and Terraform
+  warns). In `prototype-free` the zone is `internal.onek8s.lol`, a subdomain of the public zone:
+  inside the network it is answered by the private zone, outside by nothing. Its listeners serve the
+  public hostname's certificate, so a client sees a name mismatch there.
 
 ## Key Vault
 
@@ -644,7 +662,9 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | Variable | Value |
 | --- | --- |
 | `key_vault_url`, `key_vault_client_id_<namespace>` | The vault of `key_vault_name`, and for each namespace with a share of it the identity its `key-vault` service account reads it as - the namespace's hyphens as underscores, `key_vault_client_id_ingress_gateway`. |
-| `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id`, `dns_identity_client_id` | The zone of `dns_zone_name` and the identity that writes it. |
+| `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id` | The zone of `dns_zone_name`. |
+| `internal_dns_zone_name`, `internal_dns_zone_resource_group_name`, `internal_dns_zone_subscription_id` | The private zone of `internal_dns_zone_name`. |
+| `dns_identity_client_id` | The identity external-dns writes either zone as. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 
 A variable the cluster has no value for - those of a vault or zone that is not named - is left out rather than sent empty. They apply to what `path` holds itself; the repository passes them

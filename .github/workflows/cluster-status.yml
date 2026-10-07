@@ -102,6 +102,9 @@ jobs:
           kubectl get gitrepositories.source.toolkit.fluxcd.io -A
           kubectl get svc,networkpolicy -n flux-system -o wide
           kubectl get receivers.notification.toolkit.fluxcd.io -A
+          # The path the repository's GitHub webhook calls, after https://<flux_webhook_hostname>.
+          echo "webhookPath: $(kubectl get receivers.notification.toolkit.fluxcd.io -n flux-system github -o jsonpath='{.status.webhookPath}')"
+          kubectl get receivers.notification.toolkit.fluxcd.io -n flux-system github -o jsonpath='{.status.conditions}'; echo
           kubectl get deploy -n flux-system notification-controller -o jsonpath="{.spec.template.spec.containers[0].args}"; echo
           kubectl get gatewayclass,gateway,httproute -A
           kubectl get gateway -n ingress-gateway -o yaml
@@ -109,3 +112,6 @@ jobs:
           kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=80 --prefix
           kubectl logs -n external-dns deploy/external-dns --tail=80
           kubectl logs -n external-dns deploy/external-dns-internal --tail=80
+          kubectl logs -n external-dns deploy/external-dns-public --tail=40
+          kubectl get kustomization -n flux-system flux-webhook -o jsonpath="{.status.conditions}"; echo
+          kubectl get helmrelease -n flux-system external-dns-public -o jsonpath="{.status.conditions}"; echo

@@ -539,9 +539,21 @@ deploys, each acting as an identity created here:
 
 - **Certificates** are kept in the cluster's [Key Vault](#key-vault) as `ingress-gateway--<name>` -
   the share of the vault that belongs to `ingress-gateway`. External Secrets Operator syncs each into
-  the Secret its listener names, as `ingress-gateway/key-vault`. They are put in the vault by hand -
-  `az keyvault certificate import`, by an admin group - or issued by the vault through an integrated
-  CA. A new version is picked up within the hour.
+  the Secret its listener names, as `ingress-gateway/key-vault`, unpacking the secret behind the
+  certificate as PKCS#12 - so a certificate is imported as a `.pfx`, never as PEM. A new version is
+  picked up within the hour.
+
+  The `https-example` listener's certificate, `ingress-gateway--hello-example`, is issued and renewed
+  by the [Renew Certificate](.github/workflows/renew-certificate.yml) workflow: Let's Encrypt, with
+  the DNS-01 challenge solved in the environment's `dns_zone_name`, imported into its
+  `key_vault_name` - both read from `envs/<environment>.tfvars`. It runs monthly for
+  `prototype-free` and renews when fewer than 30 days are left; run it by hand for another
+  environment, other domains or the staging CA. It needs the variables `AZURE_CLIENT_ID`,
+  `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` and `LETSENCRYPT_EMAIL` and the secret
+  `AZURE_CLIENT_SECRET`, for a service principal holding `Key Vault Certificates Officer` and
+  `Key Vault Secrets Officer` on the vault and `DNS Zone Contributor` on the zone. The Let's Encrypt
+  account key is kept in the vault beside the certificate, as `letsencrypt-account-key` - a name in
+  no namespace's share. Other certificates can still be imported by hand by an admin group.
 - **DNS**: with `dns_zone_name` set, `<cluster identity>-dns` is federated with
   `external-dns/external-dns` and granted `DNS Zone Contributor` on the zone. external-dns keeps an A
   record per listener hostname, pointing at the Gateway's internal load balancer IP. The zone is

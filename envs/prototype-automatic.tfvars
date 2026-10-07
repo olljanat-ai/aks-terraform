@@ -77,3 +77,7 @@ entra_reader_group_object_ids = []
 #   }
 #   team-search = {}
 # }
+
+# A Key Vault for the cluster, created in resource_group_name, with a share of it for every managed
+# namespace - the secrets named `<namespace>--<name>`. Key Vault names are global.
+# key_vault_name = "kv-..."

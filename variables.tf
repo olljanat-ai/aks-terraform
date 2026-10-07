@@ -459,18 +459,41 @@ variable "key_vault_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the existing Azure Key Vault the TLS certificates of the Gateway listeners are kept in.
-The Gateway reads listener certificates from Kubernetes Secrets only, so External Secrets Operator, deployed through Flux, syncs each certificate into one. An identity is
-created for it here, federated with its Kubernetes service account and granted
-`Key Vault Secrets User` on the vault - which therefore has to use the Azure RBAC permission model.
-Leave it unset and no certificate is synced.
+Name of the Azure Key Vault created for the cluster, in `resource_group_name`. Key Vault names are
+global: 3 to 24 letters, digits and single hyphens, starting with a letter. Leave it unset and no
+vault is created and nothing is synced from one.
+
+The one vault holds the secrets of every namespace, kept apart by name: a namespace owns the secrets
+named `<namespace>--<name>`. Each namespace in `key_vault_namespaces` and `managed_namespaces` gets
+an identity of its own, federated with its `key-vault` service account and granted
+`Key Vault Secrets User` with an Azure ABAC condition that lets it read its own secrets and no
+others. The namespace's `writer` and `admin` grants manage its secrets under the same condition, and
+`entra_admin_group_object_ids` run the whole vault as `Key Vault Administrator`.
 DESCRIPTION
+
+  validation {
+    condition     = var.key_vault_name == null || can(regex("^[a-zA-Z](-?[a-zA-Z0-9])+$", var.key_vault_name)) && try(length(var.key_vault_name) >= 3 && length(var.key_vault_name) <= 24, false)
+    error_message = "key_vault_name must be 3 to 24 letters, digits and single hyphens, starting with a letter and ending with a letter or digit."
+  }
 }
 
-variable "key_vault_resource_group_name" {
-  type        = string
-  default     = null
-  description = "Resource group of the existing Key Vault. Defaults to `resource_group_name`."
+variable "key_vault_namespaces" {
+  type        = set(string)
+  default     = ["ingress-gateway", "traefik"]
+  description = <<DESCRIPTION
+Namespaces that are not in `managed_namespaces` and still get a share of the Key Vault: the ones the
+Flux repository creates for the platform itself. Every managed namespace gets one anyway.
+
+The defaults are the platform's: `ingress-gateway`, whose listener certificates are kept in the vault
+as `ingress-gateway--<name>`, and `traefik`, whose license is. Nothing is created for them without a
+`key_vault_name`.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for name in var.key_vault_namespaces : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", name))])
+    error_message = "Every entry of key_vault_namespaces must be a Kubernetes namespace name: 1 to 63 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit."
+  }
 }
 
 variable "kubernetes_version" {

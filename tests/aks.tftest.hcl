@@ -28,11 +28,15 @@ mock_provider "azurerm" {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/privateDnsZones/privatelink.swedencentral.azmk8s.io"
     }
   }
-  mock_data "azurerm_key_vault" {
+  mock_data "azurerm_client_config" {
     defaults = {
-      id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-aks-test"
-      vault_uri                  = "https://kv-aks-test.vault.azure.net/"
-      rbac_authorization_enabled = true
+      tenant_id = "66666666-6666-6666-6666-666666666666"
+    }
+  }
+  mock_resource "azurerm_key_vault" {
+    defaults = {
+      id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-aks-test"
+      vault_uri = "https://kv-aks-test.vault.azure.net/"
     }
   }
   mock_data "azurerm_dns_zone" {
@@ -2454,7 +2458,7 @@ run "flux_is_told_nothing_it_has_no_value_for" {
 
   assert {
     condition = alltrue([
-      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "tls_key_vault_url"),
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_url"),
       !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "dns_zone_name"),
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.cluster_name == "aks-test",
     ])
@@ -2469,36 +2473,174 @@ run "flux_is_told_nothing_it_has_no_value_for" {
 run "no_vault_and_no_zone_create_no_identities" {
   command = plan
 
+  variables {
+    managed_namespaces = {
+      example = {}
+    }
+  }
+
   assert {
     condition = alltrue([
-      length(azurerm_user_assigned_identity.tls_certificates) == 0,
+      length(azurerm_key_vault.this) == 0,
+      length(azurerm_user_assigned_identity.key_vault) == 0,
+      length(azurerm_federated_identity_credential.key_vault) == 0,
+      length(azurerm_role_assignment.key_vault_namespace_reader) == 0,
       length(azurerm_user_assigned_identity.external_dns) == 0,
-      length(azurerm_federated_identity_credential.tls_certificates) == 0,
       length(azurerm_federated_identity_credential.external_dns) == 0,
     ])
-    error_message = "Without a vault or a zone there is nothing to create identities for."
+    error_message = "Without a vault or a zone there is nothing to create identities for - managed namespaces included."
   }
 }
 
-run "the_certificate_identity_reads_the_vault_as_its_service_account" {
+run "the_vault_is_created_next_to_the_cluster_on_azure_rbac" {
   command = plan
 
   variables {
-    key_vault_name                = "kv-aks-test"
-    key_vault_resource_group_name = "rg-shared"
+    key_vault_name = "kv-aks-test"
   }
 
   assert {
     condition = alltrue([
-      azurerm_user_assigned_identity.tls_certificates[0].name == "id-sec-test-aks-tls",
-      azurerm_federated_identity_credential.tls_certificates[0].subject == "system:serviceaccount:ingress-gateway:keyvault-certificates",
-      azurerm_federated_identity_credential.tls_certificates[0].audience == tolist(["api://AzureADTokenExchange"]),
-      azurerm_role_assignment.tls_certificates[0].role_definition_name == "Key Vault Secrets User",
-      azurerm_role_assignment.tls_certificates[0].scope == data.azurerm_key_vault.tls[0].id,
-      data.azurerm_key_vault.tls[0].resource_group_name == "rg-shared",
+      azurerm_key_vault.this[0].name == "kv-aks-test",
+      azurerm_key_vault.this[0].resource_group_name == "rg-aks-test",
+      azurerm_key_vault.this[0].rbac_authorization_enabled == true,
+      azurerm_key_vault.this[0].sku_name == "standard",
     ])
-    error_message = "The certificate identity should be federated with keyvault-certificates in ingress-gateway and read the vault's secrets."
+    error_message = "The vault should be created in the cluster's resource group, on the Azure RBAC permission model."
   }
+}
+
+run "every_namespace_reads_its_own_share_of_the_vault" {
+  command = plan
+
+  variables {
+    key_vault_name = "kv-aks-test"
+    managed_namespaces = {
+      example = {}
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      keys(azurerm_user_assigned_identity.key_vault) == ["example", "ingress-gateway", "traefik"],
+      azurerm_user_assigned_identity.key_vault["example"].name == "id-sec-test-aks-kv-example",
+      azurerm_federated_identity_credential.key_vault["example"].subject == "system:serviceaccount:example:key-vault",
+      azurerm_federated_identity_credential.key_vault["ingress-gateway"].subject == "system:serviceaccount:ingress-gateway:key-vault",
+      azurerm_federated_identity_credential.key_vault["example"].audience == tolist(["api://AzureADTokenExchange"]),
+    ])
+    error_message = "Every managed namespace and every one of key_vault_namespaces should get an identity federated with its own key-vault service account."
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_role_assignment.key_vault_namespace_reader["example"].role_definition_name == "Key Vault Secrets User",
+      azurerm_role_assignment.key_vault_namespace_reader["example"].condition_version == "2.0",
+      strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})"),
+      strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "@Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'"),
+      strcontains(azurerm_role_assignment.key_vault_namespace_reader["ingress-gateway"].condition, "StringStartsWith 'ingress-gateway--'"),
+      !strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "readMetadata"),
+    ])
+    error_message = "Each namespace identity should read the values of the secrets under its own prefix only, and still be able to list the vault."
+  }
+}
+
+run "the_platform_namespaces_can_be_changed" {
+  command = plan
+
+  variables {
+    key_vault_name       = "kv-aks-test"
+    key_vault_namespaces = ["ingress-gateway"]
+  }
+
+  assert {
+    condition     = keys(azurerm_user_assigned_identity.key_vault) == ["ingress-gateway"]
+    error_message = "Only the namespaces key_vault_namespaces names should get a share, with no managed namespaces."
+  }
+}
+
+run "namespace_writers_manage_their_own_secrets" {
+  command = plan
+
+  variables {
+    key_vault_name = "kv-aks-test"
+    managed_namespaces = {
+      example = {
+        access = [
+          { role = "namespace_user", principal_id = "22222222-2222-2222-2222-222222222222" },
+          { role = "reader", principal_id = "22222222-2222-2222-2222-222222222222" },
+          { role = "writer", principal_id = "33333333-3333-3333-3333-333333333333" },
+          { role = "admin", principal_id = "44444444-4444-4444-4444-444444444444", principal_type = "ServicePrincipal" },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      keys(azurerm_role_assignment.key_vault_namespace_writer) == [
+        "example/admin/44444444-4444-4444-4444-444444444444",
+        "example/writer/33333333-3333-3333-3333-333333333333",
+      ],
+      azurerm_role_assignment.key_vault_namespace_writer["example/writer/33333333-3333-3333-3333-333333333333"].role_definition_name == "Key Vault Secrets Officer",
+      azurerm_role_assignment.key_vault_namespace_writer["example/writer/33333333-3333-3333-3333-333333333333"].principal_type == "Group",
+      azurerm_role_assignment.key_vault_namespace_writer["example/admin/44444444-4444-4444-4444-444444444444"].principal_type == "ServicePrincipal",
+      azurerm_role_assignment.key_vault_namespace_writer["example/writer/33333333-3333-3333-3333-333333333333"].condition_version == "2.0",
+    ])
+    error_message = "The namespace's writers and admins - and nobody else - should be Secrets Officers of the vault."
+  }
+
+  assert {
+    condition = alltrue([
+      for fragment in [
+        "@Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'",
+        "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'",
+        "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/setSecret/action'})",
+        "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/delete'})",
+        "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/purge/action'})",
+      ] : strcontains(azurerm_role_assignment.key_vault_namespace_writer["example/writer/33333333-3333-3333-3333-333333333333"].condition, fragment)
+    ])
+    error_message = "A writer's condition should hold creating a secret to the prefix by the requested name, and everything else done to a secret by its name."
+  }
+}
+
+run "the_admin_groups_run_the_whole_vault" {
+  command = plan
+
+  variables {
+    key_vault_name               = "kv-aks-test"
+    entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_role_assignment.key_vault_admin["22222222-2222-2222-2222-222222222222"].role_definition_name == "Key Vault Administrator",
+      azurerm_role_assignment.key_vault_admin["22222222-2222-2222-2222-222222222222"].condition == null,
+    ])
+    error_message = "The cluster's admin groups should administer the vault without a condition."
+  }
+}
+
+run "rejects_a_namespace_whose_share_would_overlap_another" {
+  command = plan
+
+  variables {
+    key_vault_name = "kv-aks-test"
+    managed_namespaces = {
+      "team--a" = {}
+    }
+  }
+
+  expect_failures = [azurerm_key_vault.this]
+}
+
+run "rejects_a_vault_name_azure_would_refuse" {
+  command = plan
+
+  variables {
+    key_vault_name = "kv--aks-test"
+  }
+
+  expect_failures = [var.key_vault_name]
 }
 
 run "external_dns_writes_the_zone_as_its_service_account" {
@@ -2524,28 +2666,53 @@ run "vault_and_zone_grants_can_be_left_to_someone_else" {
   command = plan
 
   variables {
-    key_vault_name          = "kv-aks-test"
-    dns_zone_name           = "contoso.com"
-    create_role_assignments = false
+    key_vault_name               = "kv-aks-test"
+    dns_zone_name                = "contoso.com"
+    create_role_assignments      = false
+    entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
+    managed_namespaces = {
+      example = {
+        access = [{ role = "writer", principal_id = "33333333-3333-3333-3333-333333333333" }]
+      }
+    }
   }
 
   assert {
     condition = alltrue([
-      length(azurerm_role_assignment.tls_certificates) == 0,
+      length(azurerm_role_assignment.key_vault_namespace_reader) == 0,
+      length(azurerm_role_assignment.key_vault_namespace_writer) == 0,
+      length(azurerm_role_assignment.key_vault_admin) == 0,
       length(azurerm_role_assignment.external_dns) == 0,
-      length(azurerm_user_assigned_identity.tls_certificates) == 1,
+      length(azurerm_user_assigned_identity.key_vault) == 3,
       length(azurerm_user_assigned_identity.external_dns) == 1,
     ])
     error_message = "With create_role_assignments = false the identities are still created, and the grants left to the estate."
   }
+
+  # The groups and the namespace grant are there to show they get no vault role either; that they
+  # get nothing on the cluster or the namespace is warned about as usual.
+  expect_failures = [check.entra_groups_are_granted_somewhere, check.namespace_access_is_granted_somewhere]
 }
 
-run "flux_is_told_where_the_certificates_and_the_zone_are" {
+run "flux_is_told_where_the_vault_and_the_zone_are" {
   command = plan
+
+  # The vault is created here, so its URI is known only once it exists.
+  override_resource {
+    target          = azurerm_key_vault.this[0]
+    override_during = plan
+    values = {
+      id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-aks-test"
+      vault_uri = "https://kv-aks-test.vault.azure.net/"
+    }
+  }
 
   variables {
     key_vault_name = "kv-aks-test"
     dns_zone_name  = "contoso.com"
+    managed_namespaces = {
+      example = {}
+    }
     flux_git_repository = {
       url  = "https://github.com/example/cluster-config"
       path = "./clusters/aks-test"
@@ -2554,31 +2721,14 @@ run "flux_is_told_where_the_certificates_and_the_zone_are" {
 
   assert {
     condition = alltrue([
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.tls_key_vault_url == "https://kv-aks-test.vault.azure.net/",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_url == "https://kv-aks-test.vault.azure.net/",
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_example"),
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_ingress_gateway"),
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_traefik"),
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_name == "contoso.com",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_resource_group_name == "rg-aks-test",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_subscription_id == "55555555-5555-5555-5555-555555555555",
     ])
-    error_message = "The platform Kustomization should be told the vault URL and where the zone is."
+    error_message = "The platform Kustomization should be told the vault URL, each namespace's identity and where the zone is."
   }
 }
-
-run "warns_about_a_vault_on_access_policies" {
-  command = plan
-
-  override_data {
-    target = data.azurerm_key_vault.tls[0]
-    values = {
-      id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-aks-test"
-      vault_uri                  = "https://kv-aks-test.vault.azure.net/"
-      rbac_authorization_enabled = false
-    }
-  }
-
-  variables {
-    key_vault_name = "kv-aks-test"
-  }
-
-  expect_failures = [check.key_vault_uses_azure_rbac]
-}
-

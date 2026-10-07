@@ -20,6 +20,19 @@ DESCRIPTION
   value       = one(azurerm_user_assigned_identity.this[*].id)
 }
 
+output "key_vault_id" {
+  description = "Resource ID of the cluster's Key Vault. Null when `key_vault_name` is unset."
+  value       = one(azurerm_key_vault.this[*].id)
+}
+
+output "key_vault_uri" {
+  description = <<DESCRIPTION
+URI of the cluster's Key Vault, for `az keyvault secret set --id` and the like. Null when
+`key_vault_name` is unset. A namespace's secrets are the ones named `<namespace>--<name>`.
+DESCRIPTION
+  value       = one(azurerm_key_vault.this[*].vault_uri)
+}
+
 output "kubelet_identity_object_id" {
   description = <<DESCRIPTION
 Object ID of the identity the nodes run as. Grant it `AcrPull` on a container registry to let the

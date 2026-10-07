@@ -18,12 +18,15 @@ virtual_network_name                = "vnet-aks-prototype"
 node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
-# Where the Gateway's listener certificates are kept and its hostnames published. Both exist already;
-# the cluster gets an identity for each, federated with the service account that uses it, and the
-# Flux repository is told where they are. The vault has to use the Azure RBAC permission model.
-# TODO: name the vault and the zone.
-# key_vault_name                = "kv-..."
-# key_vault_resource_group_name = "rg-..."
+# The cluster's Key Vault, created in resource_group_name. It holds the secrets of every namespace -
+# the listener certificates of ingress-gateway, the Traefik license, the example team's - each
+# namespace reading only the ones named `<namespace>--<name>`. Key Vault names are global; pick
+# another if this one is taken.
+key_vault_name = "kv-proto-aks-free"
+
+# Where the Gateway's hostnames are published. The zone exists already; the cluster gets an identity
+# federated with external-dns's service account, and the Flux repository is told where the zone is.
+# TODO: name the zone.
 # dns_zone_name                 = "contoso.com"
 # dns_zone_resource_group_name  = "rg-..."
 

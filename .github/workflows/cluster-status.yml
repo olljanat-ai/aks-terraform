@@ -89,6 +89,7 @@ jobs:
           kubectl describe pods -n traefik | tail -n 60
           kubectl get events -n traefik --sort-by=.lastTimestamp | tail -n 30
           kubectl get svc -n traefik -o wide
+          kubectl get externalsecrets.external-secrets.io,secretstores.external-secrets.io -A
           kubectl get gatewayclass,gateway,httproute -A
           kubectl get gateway -n ingress-gateway -o yaml
           kubectl get httproute -A -o yaml

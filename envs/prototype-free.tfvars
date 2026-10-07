@@ -51,6 +51,10 @@ api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 entra_admin_group_object_ids  = ["2c406e00-7a2a-447a-a617-ff0c907380e3"]
 entra_reader_group_object_ids = []
 
+# No Azure Policy add-on: its Gatekeeper alone asks for 360m CPU and 868Mi of memory, a fifth of
+# the single B2s node, and nothing in this prototype is governed by policy.
+azure_policy_enabled = false
+
 default_node_pool = {
   vm_size             = "Standard_B2s"
   enable_auto_scaling = false

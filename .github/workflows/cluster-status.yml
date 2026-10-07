@@ -100,6 +100,9 @@ jobs:
           kubectl get externalsecrets.external-secrets.io,secretstores.external-secrets.io -A
           kubectl get externalsecrets.external-secrets.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
           kubectl get gitrepositories.source.toolkit.fluxcd.io -A
+          kubectl get svc,networkpolicy -n flux-system -o wide
+          kubectl get receivers.notification.toolkit.fluxcd.io -A
+          kubectl get deploy -n flux-system notification-controller -o jsonpath="{.spec.template.spec.containers[0].args}"; echo
           kubectl get gatewayclass,gateway,httproute -A
           kubectl get gateway -n ingress-gateway -o yaml
           kubectl get httproute -A -o yaml

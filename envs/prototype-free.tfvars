@@ -19,7 +19,7 @@ node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
 # The cluster's Key Vault, created in resource_group_name. It holds the secrets of every namespace -
-# the listener certificates of ingress-gateway, the Traefik license, the example team's - each
+# the listener certificates of ingress-gateway, the example team's - each
 # namespace reading only the ones named `<namespace>--<name>`. Key Vault names are global; pick
 # another if this one is taken.
 key_vault_name = "kv-proto-aks-free"

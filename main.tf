@@ -194,9 +194,9 @@ module "aks" {
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
   # Ingress is the Kubernetes Gateway API: AKS installs the managed Gateway API CRDs (standard
-  # channel), and the controller serving them - Traefik Hub API Gateway, behind an Azure internal load
-  # balancer - is deployed through Flux, together with the Gateways, their listeners and their
-  # certificates. See the README.
+  # channel), and the controller serving them - Traefik Proxy, behind an Azure internal load balancer -
+  # is deployed through Flux, together with the Gateways, their listeners and their certificates. See
+  # the README.
   #
   # Every managed ingress AKS offers stays off: the Application Gateway for Containers ALB Controller
   # add-on, App Routing with its NGINX controller and the Istio based Gateway API implementation App

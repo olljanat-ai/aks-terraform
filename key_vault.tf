@@ -83,7 +83,7 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
 }
 
 # The cluster's admin groups run the whole vault: the platform's secrets and certificates - the
-# listener certificates in ingress-gateway, the Traefik license - are put there by them.
+# listener certificates in ingress-gateway - are put there by them.
 resource "azurerm_role_assignment" "key_vault_admin" {
   for_each = toset(var.create_role_assignments && local.key_vault_enabled ? var.entra_admin_group_object_ids : [])
 

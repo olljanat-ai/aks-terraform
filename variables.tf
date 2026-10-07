@@ -494,14 +494,13 @@ DESCRIPTION
 
 variable "key_vault_namespaces" {
   type        = set(string)
-  default     = ["ingress-gateway", "traefik"]
+  default     = ["ingress-gateway"]
   description = <<DESCRIPTION
 Namespaces that are not in `managed_namespaces` and still get a share of the Key Vault: the ones the
 Flux repository creates for the platform itself. Every managed namespace gets one anyway.
 
-The defaults are the platform's: `ingress-gateway`, whose listener certificates are kept in the vault
-as `ingress-gateway--<name>`, and `traefik`, whose license is. Nothing is created for them without a
-`key_vault_name`.
+The default is the platform's: `ingress-gateway`, whose listener certificates are kept in the vault
+as `ingress-gateway--<name>`. Nothing is created for it without a `key_vault_name`.
 DESCRIPTION
   nullable    = false
 

@@ -1,19 +1,18 @@
 name: Renew Certificate
 
-# Issuance and renewal of the certificates the internal Gateway's listeners serve - one job per
-# certificate, `hello-example` (`https-example`, hello.onek8s.lol) and `traefik-dashboard`
-# (`https-traefik`, traefik.onek8s.lol) on the schedule, the one given when run by hand:
+# Issuance and renewal of the certificate the internal Gateway's listeners serve - `wildcard`, for
+# *.onek8s.lol and *.internal.onek8s.lol, which every listener serves - on the schedule and whenever
+# this file changes on main, or the one given when run by hand:
 #
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> Key Vault --> External Secrets --> Traefik
 #
 # The certificate is imported into the cluster's Key Vault as `ingress-gateway--<name>` - the share of
 # the vault that belongs to ingress-gateway (README, "Key Vault"). olljanat-ai/aks-fluxcd-platform
-# reads it from there with an ExternalSecret (infrastructure/certificates/https-<listener>-tls.yaml) that
+# reads it from there with an ExternalSecret (infrastructure/certificates/gateway-tls.yaml) that
 # unpacks the secret behind the certificate as a PKCS#12 bundle, and turns it into the
-# `kubernetes.io/tls` Secret the listener names. So two things here are not free to change:
+# `kubernetes.io/tls` Secret the listeners name. So two things here are not free to change:
 #
-#   - the name: `ingress-gateway--` + `example_certificate_name` (or `traefik_certificate_name`) of
-#     the platform's cluster-settings.
+#   - the name: `ingress-gateway--` + `gateway_certificate_name` of the platform's cluster-settings.
 #   - the format: the certificate is imported as PKCS#12, never as PEM. A certificate's secret keeps
 #     the content type it was imported with, and a PEM one is not what the ExternalSecret unpacks.
 #
@@ -35,7 +34,9 @@ name: Renew Certificate
 #
 #   - Key Vault Certificates Officer and Key Vault Secrets Officer on the vault (or Key Vault
 #     Administrator) - the certificate, and the ACME account key beside it.
-#   - DNS Zone Contributor on the DNS zone - the `_acme-challenge` TXT records.
+#   - DNS Zone Contributor on the DNS zone - the `_acme-challenge` TXT records. The private zone's
+#     names are proven there too: internal.onek8s.lol is not delegated publicly, so Let's Encrypt
+#     looks up `_acme-challenge.internal.onek8s.lol` in the public zone.
 on:
   schedule:
     # Monthly. A run with nothing to renew exits before ACME is contacted, so a run outside the
@@ -43,6 +44,12 @@ on:
     # window, so a bad day (Let's Encrypt outage, DNS hiccup) is worth a manual re-run rather than
     # waiting for the next month.
     - cron: "17 3 12 * *"
+  # A change to this file on main - a certificate added, its domains changed - takes effect at once
+  # rather than at the next month's run. A certificate that is not due is left alone.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/renew-certificate.yml
   workflow_dispatch:
     inputs:
       environment:
@@ -54,12 +61,12 @@ on:
       domains:
         description: "Comma-separated SANs. The platform's hostname of the listener must be one of them"
         required: false
-        default: "hello.onek8s.lol"
+        default: "*.onek8s.lol,*.internal.onek8s.lol"
         type: string
       certificate_name:
         description: "The platform's <listener>_certificate_name; imported as ingress-gateway--<this>"
         required: false
-        default: "hello-example"
+        default: "wildcard"
         type: string
       acme_server:
         description: "letsencrypt (trusted, rate-limited) or letsencrypt-staging (untrusted, for testing)"
@@ -80,12 +87,12 @@ jobs:
   renew:
     name: ingress-gateway--${{ matrix.certificate_name }} (${{ inputs.environment || 'prototype-free' }})
     runs-on: ubuntu-latest
-    # The schedule renews every certificate the platform's listeners serve; a run by hand, the one it
-    # is given. A certificate that fails does not hold back the others.
+    # The schedule (and a push) renews every certificate the platform's listeners serve; a run by
+    # hand, the one it is given. A certificate that fails does not hold back the others.
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"hello.onek8s.lol","certificate_name":"hello-example"},{"domains":"traefik.onek8s.lol","certificate_name":"traefik-dashboard"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol,*.internal.onek8s.lol","certificate_name":"wildcard"}]') }}
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
@@ -310,12 +317,15 @@ jobs:
             -inkey "$key" -in "$crt" \
             -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
             -passout pass: -out "$pfx"
+          # As JSON: tsv puts each value of a list on a line of its own.
           imported="$(az keyvault certificate import \
             --vault-name "$VAULT" --name "$CERT_NAME" \
             --file "$pfx" \
             --only-show-errors \
-            --query '[id, attributes.expires, policy.secretProperties.contentType]' -o tsv)"
-          IFS=$'\t' read -r id expires content_type <<< "$imported"
+            --query '{id: id, expires: attributes.expires, contentType: policy.secretProperties.contentType}' -o json)"
+          id="$(jq -r '.id' <<< "$imported")"
+          expires="$(jq -r '.expires' <<< "$imported")"
+          content_type="$(jq -r '.contentType' <<< "$imported")"
           echo "id=$id" >> "$GITHUB_OUTPUT"
           echo "expires=$expires" >> "$GITHUB_OUTPUT"
           echo "Imported $id (expires $expires, $content_type)"

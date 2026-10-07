@@ -69,18 +69,26 @@ jobs:
 
       - name: Inside the cluster
         continue-on-error: true
-        # The run command API, called directly: `az aks command invoke` fails on its own poller
-        # ("Operation returned an invalid status 'OK'"). The command runs in a pod in the cluster as
-        # this principal, through the AKS Entra ID token passed as clusterToken.
+        # Straight from the runner, through the API server: no pod in the cluster, which a full node
+        # could not schedule (`az aks command invoke` needs one). The principal signs in with Entra ID
+        # through kubelogin, and needs a Kubernetes RBAC role on the cluster - Azure Kubernetes
+        # Service RBAC Reader at least - or every command below comes back forbidden.
+        env:
+          AAD_SERVICE_PRINCIPAL_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AAD_SERVICE_PRINCIPAL_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
-          cat > command.sh <<'SCRIPT'
-          set -x
+          sudo az aks install-cli --only-show-errors >/dev/null
+          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubelogin convert-kubeconfig -l spn
+          # Report everything, whatever one command says.
+          set +e -x
           kubectl version
           kubectl get nodes -o wide
           kubectl describe nodes | sed -n "/Allocatable:/,/Events:/p"
           kubectl get pods -A --field-selector=status.phase=Pending -o wide
           kubectl get resourcequota -A
-          kubectl get pods -A -o custom-columns=NS:.metadata.namespace,POD:.metadata.name,CPU:.spec.containers[*].resources.requests.cpu,MEM:.spec.containers[*].resources.requests.memory
+          kubectl get pods -A -o 'custom-columns=NS:.metadata.namespace,POD:.metadata.name,PHASE:.status.phase,CPU:.spec.containers[*].resources.requests.cpu,MEM:.spec.containers[*].resources.requests.memory'
           kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath="{.metadata.annotations}"; echo
           kubectl get crd | grep gateway.networking.k8s.io
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
@@ -96,35 +104,3 @@ jobs:
           kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=80 --prefix
           kubectl logs -n external-dns deploy/external-dns --tail=80
           kubectl logs -n external-dns deploy/external-dns-internal --tail=80
-          SCRIPT
-          id=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query id --output tsv)
-          arm=$(az account get-access-token --resource https://management.azure.com/ --query accessToken --output tsv)
-          aks=$(az account get-access-token --resource 6dae42f8-4368-4678-94ff-3960e28e3630 --query accessToken --output tsv)
-          body=$(jq -n --rawfile command command.sh --arg token "$aks" '{command: $command, context: "", clusterToken: $token}')
-          status=$(curl -sS -D headers.txt -o response.json -w '%{http_code}' -X POST \
-            -H "Authorization: Bearer $arm" -H "Content-Type: application/json" -d "$body" \
-            "https://management.azure.com${id}/runCommand?api-version=2024-09-01")
-          echo "run command: HTTP $status"
-          # Answered at once (200) or accepted to be polled at Location (202).
-          if jq -e '.properties.logs' response.json >/dev/null 2>&1; then
-            jq -r '.properties.logs' response.json
-            exit 0
-          fi
-          location=$(tr -d '\r' < headers.txt | awk 'tolower($1) == "location:" { print $2 }')
-          if [ -z "$location" ]; then
-            cat response.json
-            exit 1
-          fi
-          for _ in $(seq 60); do
-            sleep 5
-            result=$(curl -sS -H "Authorization: Bearer $arm" "$location")
-            state=$(jq -r '.properties.provisioningState // empty' <<<"$result")
-            if [ "$state" = "Succeeded" ] || [ "$state" = "Failed" ]; then
-              jq -r '.properties.logs // ""' <<<"$result"
-              jq -r '"exit code: \(.properties.exitCode)  \(.properties.reason // "")"' <<<"$result"
-              exit 0
-            fi
-          done
-          echo "No result after 5 minutes:"
-          echo "$result"
-          exit 1

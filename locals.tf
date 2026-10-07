@@ -51,6 +51,37 @@ locals {
     },
   )
 
+  # The Flux configuration as sent to Azure, apart from the credential: a local rather than written
+  # into the resource, because the credential's version has to hash it - see flux_configuration. Its
+  # shape is known even before the inputs are, which the provider needs from a write-only body; a
+  # cluster without Flux builds it from nulls and has no configuration to send it with.
+  flux_configuration_body = {
+    properties = {
+      gitRepository = merge({
+        repositoryRef = {
+          branch = try(var.flux_git_repository.branch, null)
+        }
+        syncIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
+        url                   = try(var.flux_git_repository.url, null)
+      }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
+      kustomizations = {
+        platform = {
+          path                   = try(var.flux_git_repository.path, null)
+          prune                  = true
+          syncIntervalInSeconds  = try(var.flux_git_repository.sync_interval_seconds, null)
+          retryIntervalInSeconds = 900
+          postBuild = {
+            substitute = local.flux_cluster_settings
+          }
+        }
+      }
+      namespace  = "flux-system"
+      scope      = "cluster"
+      sourceKind = "GitRepository"
+    }
+  }
+
+
   # The Kubernetes service accounts the two workload identities are federated with. They are created
   # by the Flux repository, which has to use exactly these names and namespaces: a federated
   # credential trusts one subject and nothing else.

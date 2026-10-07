@@ -89,7 +89,7 @@ managed_namespaces = {
 }
 
 flux_git_repository = {
-  url    = "https://github.com/olljanat-ai/aks-fluxcd"
+  url    = "https://github.com/olljanat-ai/aks-fluxcd-platform"
   branch = "main"
   path   = "./clusters/prototype"
 }

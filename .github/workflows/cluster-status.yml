@@ -98,6 +98,8 @@ jobs:
           kubectl get events -n traefik --sort-by=.lastTimestamp | tail -n 30
           kubectl get svc -n traefik -o wide
           kubectl get externalsecrets.external-secrets.io,secretstores.external-secrets.io -A
+          kubectl get externalsecrets.external-secrets.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
+          kubectl get gitrepositories.source.toolkit.fluxcd.io -A
           kubectl get gatewayclass,gateway,httproute -A
           kubectl get gateway -n ingress-gateway -o yaml
           kubectl get httproute -A -o yaml

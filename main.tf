@@ -225,11 +225,13 @@ module "aks" {
     }
     web_app_routing = {
       enabled = false
+      /* Commented out because not supported by API version 2025-09-02-preview
       gateway_api_implementations = {
         app_routing_istio = {
           mode = "Disabled"
         }
       }
+      */
       nginx = {
         default_ingress_controller_type = "None"
       }

@@ -63,19 +63,57 @@ jobs:
 
       - name: Inside the cluster
         continue-on-error: true
+        # The run command API, called directly: `az aks command invoke` fails on its own poller
+        # ("Operation returned an invalid status 'OK'"). The command runs in a pod in the cluster as
+        # this principal, through the AKS Entra ID token passed as clusterToken.
         run: |
-          az aks command invoke -g "$RESOURCE_GROUP" -n "$CLUSTER" --output tsv --query logs --command '
-            set -x
-            kubectl version
-            kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath="{.metadata.annotations}"; echo
-            kubectl get crd | grep gateway.networking.k8s.io
-            kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
-            kubectl get pods -A -o wide | grep -E "NAMESPACE|traefik|external-dns|flux-system|ingress-gateway|example"
-            kubectl get svc -n traefik -o wide
-            kubectl get gatewayclass,gateway,httproute -A
-            kubectl get gateway -n ingress-gateway -o yaml
-            kubectl get httproute -A -o yaml
-            kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=80 --prefix
-            kubectl logs -n external-dns deploy/external-dns --tail=80
-            kubectl logs -n external-dns deploy/external-dns-internal --tail=80
-          '
+          cat > command.sh <<'SCRIPT'
+          set -x
+          kubectl version
+          kubectl get nodes -o wide
+          kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath="{.metadata.annotations}"; echo
+          kubectl get crd | grep gateway.networking.k8s.io
+          kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
+          kubectl get helmrelease -n flux-system traefik -o jsonpath="{.status.conditions}"; echo
+          kubectl get pods -A -o wide | grep -E "NAMESPACE|traefik|external-dns|flux-system|ingress-gateway|example"
+          kubectl describe pods -n traefik | tail -n 60
+          kubectl get events -n traefik --sort-by=.lastTimestamp | tail -n 30
+          kubectl get svc -n traefik -o wide
+          kubectl get gatewayclass,gateway,httproute -A
+          kubectl get gateway -n ingress-gateway -o yaml
+          kubectl get httproute -A -o yaml
+          kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=80 --prefix
+          kubectl logs -n external-dns deploy/external-dns --tail=80
+          kubectl logs -n external-dns deploy/external-dns-internal --tail=80
+          SCRIPT
+          id=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query id --output tsv)
+          arm=$(az account get-access-token --resource https://management.azure.com/ --query accessToken --output tsv)
+          aks=$(az account get-access-token --resource 6dae42f8-4368-4678-94ff-3960e28e3630 --query accessToken --output tsv)
+          body=$(jq -n --rawfile command command.sh --arg token "$aks" '{command: $command, context: "", clusterToken: $token}')
+          status=$(curl -sS -D headers.txt -o response.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $arm" -H "Content-Type: application/json" -d "$body" \
+            "https://management.azure.com${id}/runCommand?api-version=2024-09-01")
+          echo "run command: HTTP $status"
+          # Answered at once (200) or accepted to be polled at Location (202).
+          if jq -e '.properties.logs' response.json >/dev/null 2>&1; then
+            jq -r '.properties.logs' response.json
+            exit 0
+          fi
+          location=$(tr -d '\r' < headers.txt | awk 'tolower($1) == "location:" { print $2 }')
+          if [ -z "$location" ]; then
+            cat response.json
+            exit 1
+          fi
+          for _ in $(seq 60); do
+            sleep 5
+            result=$(curl -sS -H "Authorization: Bearer $arm" "$location")
+            state=$(jq -r '.properties.provisioningState // empty' <<<"$result")
+            if [ "$state" = "Succeeded" ] || [ "$state" = "Failed" ]; then
+              jq -r '.properties.logs // ""' <<<"$result"
+              jq -r '"exit code: \(.properties.exitCode)  \(.properties.reason // "")"' <<<"$result"
+              exit 0
+            fi
+          done
+          echo "No result after 5 minutes:"
+          echo "$result"
+          exit 1

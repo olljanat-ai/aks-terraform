@@ -18,11 +18,6 @@ virtual_network_name                = "vnet-aks-prototype"
 node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
-# Subnet Application Gateway for Containers joins to reach the pods: exactly a /24, delegated to
-# Microsoft.ServiceNetworking/trafficControllers, used for nothing else. Created ahead of time like
-# the rest of the network; the add-on identity is granted Network Contributor on it.
-application_gateway_for_containers_subnet_name = "snet-aks-alb"
-
 # Where the Gateway's listener certificates are kept and its hostnames published. Both exist already;
 # the cluster gets an identity for each, federated with the service account that uses it, and the
 # Flux repository is told where they are. The vault has to use the Azure RBAC permission model.
@@ -80,10 +75,10 @@ default_node_pool = {
 #   }
 # }
 
-# The `example` team. Flux deploys olljanat-ai/aks-hello into it (see olljanat-ai/aks-fluxcd,
-# tenants/example), and the app publishes itself through the shared Gateway. It keeps the default
-# closed ingress: a NetworkPolicy from aks-fluxcd lets Application Gateway for Containers in from
-# snet-aks-alb, and nothing else.
+# The `example` team. Flux deploys olljanat-ai/aks-fluxcd-example into it (see
+# olljanat-ai/aks-fluxcd-platform, tenants/example), and its apps publish themselves through the
+# shared Gateway. It keeps the default closed ingress: a NetworkPolicy from aks-fluxcd-platform lets
+# the Traefik pods in, and nothing else.
 managed_namespaces = {
   example = {}
 }

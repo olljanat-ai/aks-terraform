@@ -1,13 +1,3 @@
-output "application_gateway_for_containers_identity_principal_id" {
-  description = "Object ID of the identity the Application Gateway for Containers add-on runs as, for any further grants it needs."
-  value       = try(module.aks.ingress_profile_application_load_balancer_identity.objectId, null)
-}
-
-output "application_gateway_for_containers_subnet_id" {
-  description = "Resource ID of the subnet Application Gateway for Containers joins - what the `ApplicationLoadBalancer` defined through Flux associates with. Null for a cluster that brings no network, where AKS creates `aks-appgateway` in the node resource group."
-  value       = one(data.azurerm_subnet.application_gateway_for_containers[*].id)
-}
-
 output "fqdn" {
   description = "Public FQDN of the API server. Null for a private cluster without a public FQDN."
   value       = module.aks.fqdn

@@ -37,17 +37,6 @@ data "azurerm_subnet" "api_server" {
   virtual_network_name = var.virtual_network_name
 }
 
-# The subnet Application Gateway for Containers joins to reach the pods. Only a cluster in an existing
-# network names one; AKS creates `aks-appgateway` in the network it makes for a cluster that brings
-# none.
-data "azurerm_subnet" "application_gateway_for_containers" {
-  count = var.application_gateway_for_containers_subnet_name == null ? 0 : 1
-
-  name                 = var.application_gateway_for_containers_subnet_name
-  resource_group_name  = local.virtual_network_resource_group_name
-  virtual_network_name = var.virtual_network_name
-}
-
 # The Key Vault holding the listener certificates, and the public zone their hostnames are published
 # in. Both exist already, like the network; the cluster is only given access to them.
 data "azurerm_key_vault" "tls" {
@@ -203,22 +192,21 @@ module "aks" {
     node_subnet_id        = one(data.azurerm_subnet.node[*].id)
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
-  # Ingress is the Kubernetes Gateway API, served by Application Gateway for Containers: the managed
-  # Gateway API CRDs (standard channel) and the ALB Controller add-on, which provides the
-  # `azure-alb-external` GatewayClass and runs in kube-system on an identity of its own. The load
-  # balancer itself is an Azure resource the controller creates in the node resource group once an
-  # `ApplicationLoadBalancer` is defined in the cluster; that, the Gateways, their listeners and their
-  # certificates are created through Flux - see the README.
+  # Ingress is the Kubernetes Gateway API: AKS installs the managed Gateway API CRDs (standard
+  # channel), and the controller serving them - Traefik Hub API Gateway, behind an Azure internal load
+  # balancer - is deployed through Flux, together with the Gateways, their listeners and their
+  # certificates. See the README.
   #
-  # Every other managed ingress AKS offers stays off: App Routing with its NGINX controller and the
-  # Istio based Gateway API implementation App Routing can provide. All of it is stated rather than
-  # left out, because AKS Automatic enables App Routing unless the create request says otherwise -
-  # and because the module cannot validate a partially filled ingress_profile: it reads through the
-  # nested objects and fails on the ones left null. Asking for the add-on also moves the module to
-  # the 2025-09-02-preview cluster API, the one the add-on is available on.
+  # Every managed ingress AKS offers stays off: the Application Gateway for Containers ALB Controller
+  # add-on, App Routing with its NGINX controller and the Istio based Gateway API implementation App
+  # Routing can provide. All of it is stated rather than left out, because AKS Automatic enables App
+  # Routing unless the create request says otherwise, because a cluster that had the ALB Controller
+  # add-on only loses it when told to - and because the module cannot validate a partially filled
+  # ingress_profile: it reads through the nested objects and fails on the ones left null. Stating the
+  # add-on keeps the module on the 2025-09-02-preview cluster API, the only one that knows it.
   ingress_profile = {
     application_load_balancer = {
-      enabled = true
+      enabled = false
     }
     gateway_api = {
       installation = "Standard"
@@ -282,8 +270,8 @@ module "aks" {
       enabled        = true
       interval_hours = 168
     }
-    # Federates Kubernetes service accounts with Entra ID. The Application Gateway for Containers
-    # add-on authenticates to Azure this way, and does not install without it.
+    # Federates Kubernetes service accounts with Entra ID. External Secrets Operator and external-dns
+    # authenticate to Azure this way - see the identities below.
     workload_identity = {
       enabled = true
     }
@@ -335,28 +323,13 @@ resource "azurerm_role_assignment" "entra_reader" {
   principal_type       = "Group"
 }
 
-# Lets the Application Gateway for Containers add-on join the load balancer it creates to the subnet
-# in the existing network. The add-on's identity - `applicationloadbalancer-<cluster>`, in the node
-# resource group - is created by AKS together with the cluster and comes with its rights on the node
-# resource group already, so this is the one grant it is missing, and it can only be made once the
-# cluster exists. Network Contributor is what Microsoft documents; the action that is actually needed
-# is `Microsoft.Network/virtualNetworks/subnets/join/action`.
-resource "azurerm_role_assignment" "application_gateway_for_containers_subnet" {
-  count = var.create_role_assignments && var.application_gateway_for_containers_subnet_name != null ? 1 : 0
-
-  principal_id         = module.aks.ingress_profile_application_load_balancer_identity.objectId
-  scope                = data.azurerm_subnet.application_gateway_for_containers[0].id
-  role_definition_name = "Network Contributor"
-  principal_type       = "ServicePrincipal"
-}
-
 # Identities for the two workloads that publish through the Gateway on the cluster's behalf, each
 # federated with the one Kubernetes service account that acts as it - see local.*_service_account.
 # Named after the cluster identity with what they do appended, and created only for a vault or a
 # zone that is named.
 #
-# External Secrets Operator reads the listener certificates out of Key Vault with the first:
-# Application Gateway for Containers takes listener certificates from Kubernetes Secrets only.
+# External Secrets Operator reads the listener certificates out of Key Vault with the first: the
+# Gateway takes listener certificates from Kubernetes Secrets only.
 resource "azurerm_user_assigned_identity" "tls_certificates" {
   count = var.key_vault_name == null ? 0 : 1
 
@@ -387,7 +360,7 @@ resource "azurerm_role_assignment" "tls_certificates" {
   principal_type       = "ServicePrincipal"
 }
 
-# external-dns keeps a CNAME in the zone for every hostname a Gateway listener serves.
+# external-dns keeps an A record in the zone for every hostname a Gateway listener serves.
 resource "azurerm_user_assigned_identity" "external_dns" {
   count = var.dns_zone_name == null ? 0 : 1
 
@@ -421,17 +394,6 @@ check "key_vault_uses_azure_rbac" {
   assert {
     condition     = var.key_vault_name == null || try(data.azurerm_key_vault.tls[0].rbac_authorization_enabled, true)
     error_message = "Key Vault ${coalesce(var.key_vault_name, "-")} uses access policies rather than Azure RBAC, so the Key Vault Secrets User role granted to ${local.managed_identity_name}-tls is never consulted and the listener certificates cannot be read. Switch the vault to the Azure RBAC permission model, or give that identity Get on secrets in an access policy."
-  }
-}
-
-# Application Gateway for Containers needs a delegated subnet to join. AKS creates one for a cluster
-# that brings no network; a cluster in an existing network has to be given one, or the add-on is
-# installed and every ApplicationLoadBalancer defined in the cluster fails to provision. Terraform
-# warns rather than refuses, because a cluster can still be built and used without ingress.
-check "application_gateway_for_containers_has_a_subnet" {
-  assert {
-    condition     = !local.byo_network || var.application_gateway_for_containers_subnet_name != null
-    error_message = "${var.name} is attached to an existing virtual network and names no application_gateway_for_containers_subnet_name, so Application Gateway for Containers has no subnet to join and cannot publish anything. Create a /24 subnet in ${coalesce(var.virtual_network_name, "the network")} delegated to Microsoft.ServiceNetworking/trafficControllers and name it there."
   }
 }
 

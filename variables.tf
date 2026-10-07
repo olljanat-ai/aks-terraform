@@ -125,29 +125,6 @@ DESCRIPTION
   nullable    = false
 }
 
-variable "application_gateway_for_containers_subnet_name" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Name of the existing subnet Application Gateway for Containers joins to reach the pods, in
-`virtual_network_name`. It must be delegated to `Microsoft.ServiceNetworking/trafficControllers`,
-be exactly a `/24` - the only size AGC supports on Azure CNI Overlay - and be used for nothing else.
-The add-on identity is granted `Network Contributor` on it.
-
-Only for a cluster in an existing virtual network, which needs one for its ingress to work at all.
-A cluster that brings no network gets one from AKS (`aks-appgateway`) and cannot name its own.
-DESCRIPTION
-
-  validation {
-    condition     = var.virtual_network_name != null || var.application_gateway_for_containers_subnet_name == null
-    error_message = "application_gateway_for_containers_subnet_name names a subnet of an existing virtual network, and this cluster brings none. AKS creates the aks-appgateway subnet in the network it makes for the cluster."
-  }
-  validation {
-    condition     = var.application_gateway_for_containers_subnet_name == null || !contains(compact([var.node_subnet_name, var.system_node_subnet_name, var.api_server_subnet_name]), coalesce(var.application_gateway_for_containers_subnet_name, "-"))
-    error_message = "application_gateway_for_containers_subnet_name must name a subnet of its own. It is delegated to Microsoft.ServiceNetworking/trafficControllers, which no other subnet of the cluster can be."
-  }
-}
-
 variable "auto_upgrade" {
   type = object({
     kubernetes_channel = optional(string, "stable")
@@ -331,8 +308,10 @@ variable "dns_zone_name" {
   default     = null
   description = <<DESCRIPTION
 Name of the existing public Azure DNS zone the cluster publishes its Gateway hostnames in, for
-example `contoso.com`. external-dns, deployed through Flux, keeps a CNAME in it for every hostname a
-Gateway listener serves, pointing at the Gateway's Application Gateway for Containers frontend. An
+example `contoso.com`. external-dns, deployed through Flux, keeps an A record in it for every
+hostname a Gateway listener serves, pointing at the Gateway's address - the private IP of the Azure
+internal load balancer in front of Traefik, so the names resolve publicly to an address only
+reachable from inside the network. An
 identity is created for it here, federated with its Kubernetes service account and granted
 `DNS Zone Contributor` on the zone. Leave it unset and nothing is published.
 DESCRIPTION
@@ -481,8 +460,7 @@ variable "key_vault_name" {
   default     = null
   description = <<DESCRIPTION
 Name of the existing Azure Key Vault the TLS certificates of the Gateway listeners are kept in.
-Application Gateway for Containers reads listener certificates from Kubernetes Secrets only, so
-External Secrets Operator, deployed through Flux, syncs each certificate into one. An identity is
+The Gateway reads listener certificates from Kubernetes Secrets only, so External Secrets Operator, deployed through Flux, syncs each certificate into one. An identity is
 created for it here, federated with its Kubernetes service account and granted
 `Key Vault Secrets User` on the vault - which therefore has to use the Azure RBAC permission model.
 Leave it unset and no certificate is synced.

@@ -24,7 +24,7 @@ left out: name none, and AKS creates and manages one for the cluster instead, wh
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
 | `backend.hcl.example` | Template for the shared remote state backend. |
 | `docs/troubleshooting.md` | What to do when an apply fails or times out, and how to get a cluster stuck in `Creating` back under Terraform's control. |
-| `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, and the Dependabot schedule that watches the pinned module and provider versions. |
+| `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, the manual deploy workflow for prototype-free, and the Dependabot schedule that watches the pinned module and provider versions. |
 
 [module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
 
@@ -105,6 +105,13 @@ terraform init -backend-config=backend.hcl -backend-config="key=prototype-free.t
 The backend holds a blob lease for the duration of an apply, so two people cannot write the same
 state at once. Turn on versioning and soft delete for the container too - a truncated state file is
 only recoverable if an earlier version survives.
+
+`prototype-free` can also be deployed from GitHub: the [Deploy prototype-free](.github/workflows/deploy-prototype-free.yml)
+workflow, started by hand, plans with `envs/prototype-free.tfvars` and - when run with `apply` -
+applies that plan. It uses the service principal of the `AZURE_*` variables and the
+`AZURE_CLIENT_SECRET` secret, and finds the state through the variables `TF_STATE_RESOURCE_GROUP`,
+`TF_STATE_STORAGE_ACCOUNT` and, optionally, `TF_STATE_KEY`. It refuses to plan against an empty state
+unless told it is a first deployment.
 
 The configuration can be checked without an Azure subscription at all, which is exactly what CI
 runs on every pull request:

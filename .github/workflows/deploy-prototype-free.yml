@@ -1,0 +1,166 @@
+name: Deploy prototype-free
+
+# Plans, and on request applies, this configuration to the prototype-free cluster with
+# envs/prototype-free.tfvars. Started by hand only: choose `plan` to see what would change, `apply`
+# to change it. An apply plans first and applies exactly that plan, so what the log shows is what
+# was done.
+#
+# State is the azurerm backend in terraform.tf. The storage account is not in the repository, so it
+# is given here through variables:
+#
+#   TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT   where the `tfstate` container is.
+#   TF_STATE_KEY                                        the state blob; defaults to the key in
+#                                                       terraform.tf (aks.tfstate).
+#
+# A run that finds the state empty stops before planning unless `allow_empty_state` is set: an empty
+# state behind an existing cluster means the backend settings are wrong, and a plan against it would
+# try to create everything again.
+#
+# Credentials: the same service principal as the Renew Certificate workflow - the repository (or
+# GitHub environment) variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID and the
+# secret AZURE_CLIENT_SECRET. Terraform's providers and the backend read them as ARM_*; the backend
+# reads the state with Entra ID rather than a storage account key. The principal needs, granted
+# outside this repository, what the configuration manages - Contributor and User Access
+# Administrator (or Owner) on the resource groups it touches - and Storage Blob Data Contributor on
+# the state container.
+#
+# The optional secret FLUX_GIT_HTTPS_KEY is passed as flux_git_credentials.https_key, for a private
+# flux_git_repository; without it Flux reads the repository anonymously.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan shows the changes; apply makes them"
+        required: true
+        default: "plan"
+        type: choice
+        options: [plan, apply]
+      allow_empty_state:
+        description: "Continue with an empty state (a first deployment only)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  # Keep in step with pr.yml.
+  TERRAFORM_VERSION: "1.14.4"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  deploy:
+    name: ${{ inputs.action }} prototype-free
+    runs-on: ubuntu-latest
+    # The GitHub environment of the same name: its protection rules (required reviewers, branches)
+    # hold the run, and its variables and secrets win over the repository's.
+    environment: prototype-free
+    concurrency:
+      # One run at a time against the state; never cancel one mid-apply. The backend's blob lease
+      # protects the state as well, but a queued run is clearer than a failed lock.
+      group: terraform-prototype-free
+      cancel-in-progress: false
+    env:
+      TF_ENV: prototype-free
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+      FLUX_GIT_HTTPS_KEY: ${{ secrets.FLUX_GIT_HTTPS_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Check required configuration
+        run: |
+          missing=""
+          [ -n "$ARM_CLIENT_ID" ] || missing="$missing AZURE_CLIENT_ID"
+          [ -n "$ARM_TENANT_ID" ] || missing="$missing AZURE_TENANT_ID"
+          [ -n "$ARM_SUBSCRIPTION_ID" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
+          [ -n "$ARM_CLIENT_SECRET" ] || missing="$missing AZURE_CLIENT_SECRET"
+          [ -n "$TF_STATE_RESOURCE_GROUP" ] || missing="$missing TF_STATE_RESOURCE_GROUP"
+          [ -n "$TF_STATE_STORAGE_ACCOUNT" ] || missing="$missing TF_STATE_STORAGE_ACCOUNT"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository variables/secrets:$missing" >&2
+            echo "See the header of .github/workflows/deploy-prototype-free.yml." >&2
+            exit 1
+          fi
+
+      # HCL object syntax, as the variable's description asks. GitHub masks the secret in the log.
+      - name: Pass the Flux credentials
+        if: env.FLUX_GIT_HTTPS_KEY != ''
+        run: |
+          echo "TF_VAR_flux_git_credentials={ https_key = \"$FLUX_GIT_HTTPS_KEY\" }" >> "$GITHUB_ENV"
+
+      # terraform.tf sets use_oidc on the backend; with a client secret set, the secret is what it
+      # authenticates with. use_azuread_auth reads the blob with that identity, not an account key.
+      - name: Initialize
+        run: |
+          set -euo pipefail
+          args=(
+            -backend-config="resource_group_name=$TF_STATE_RESOURCE_GROUP"
+            -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT"
+            -backend-config="use_azuread_auth=true"
+          )
+          if [ -n "$TF_STATE_KEY" ]; then
+            args+=(-backend-config="key=$TF_STATE_KEY")
+          fi
+          terraform init "${args[@]}"
+
+      - name: Check the state
+        env:
+          ALLOW_EMPTY_STATE: ${{ inputs.allow_empty_state }}
+        run: |
+          set -euo pipefail
+          count="$(terraform state list | wc -l)"
+          echo "The state holds $count resources."
+          if [ "$count" -eq 0 ] && [ "$ALLOW_EMPTY_STATE" != "true" ]; then
+            echo "::error::The state is empty. Check TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT and TF_STATE_KEY, or set allow_empty_state for a first deployment." >&2
+            exit 1
+          fi
+
+      - name: Plan
+        id: plan
+        run: |
+          set -euo pipefail
+          set +e
+          terraform plan -var-file="envs/${TF_ENV}.tfvars" -out=tfplan -detailed-exitcode -no-color | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          # 0: no changes, 2: changes, anything else: an error.
+          case "$code" in
+            0) echo "changes=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "changes=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$code" ;;
+          esac
+
+      - name: Apply
+        if: inputs.action == 'apply' && steps.plan.outputs.changes == 'true'
+        run: terraform apply -no-color tfplan
+
+      - name: Summary
+        if: always() && steps.plan.outcome != 'skipped'
+        env:
+          ACTION: ${{ inputs.action }}
+          CHANGES: ${{ steps.plan.outputs.changes }}
+        run: |
+          {
+            echo "### Terraform ${ACTION} - ${TF_ENV}"
+            echo
+            if [ -f plan.txt ]; then
+              grep -E '^(Plan:|No changes\.|Changes to Outputs:)' plan.txt || true
+            fi
+            if [ "$ACTION" = "apply" ] && [ "$CHANGES" = "true" ]; then
+              echo
+              echo "Apply: ${{ job.status }}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

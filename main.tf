@@ -647,34 +647,12 @@ resource "azapi_resource" "flux_configuration" {
   name      = "platform"
   parent_id = module.aks.resource_id
   type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
-  body = {
-    properties = {
-      gitRepository = merge({
-        repositoryRef = {
-          branch = var.flux_git_repository.branch
-        }
-        syncIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
-        url                   = var.flux_git_repository.url
-      }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
-      kustomizations = {
-        platform = {
-          path                   = var.flux_git_repository.path
-          prune                  = true
-          syncIntervalInSeconds  = var.flux_git_repository.sync_interval_seconds
-          retryIntervalInSeconds = 900
-          postBuild = {
-            substitute = local.flux_cluster_settings
-          }
-        }
-      }
-      namespace  = "flux-system"
-      scope      = "cluster"
-      sourceKind = "GitRepository"
-    }
-  }
+  body      = local.flux_configuration_body
   # The token or private key of a private repository. Write-only: Azure gets it, the state does not.
-  # Terraform cannot see a write-only value change, so each one is sent again whenever its hash in
-  # sensitive_body_version moves - which is what makes rotating the credential an ordinary apply.
+  # AzAPI sends it only when its entry in sensitive_body_version moves, yet every update is a PUT
+  # that replaces the whole configuration - and Azure drops protected settings a PUT leaves out. So
+  # the version hashes the body along with the credential: any change to the configuration sends
+  # the credential with it, and rotating the credential is an ordinary apply.
   sensitive_body = length(local.flux_protected_settings) == 0 ? null : {
     properties = {
       configurationProtectedSettings = local.flux_protected_settings
@@ -682,7 +660,7 @@ resource "azapi_resource" "flux_configuration" {
   }
   sensitive_body_version = {
     for setting, value in local.flux_protected_settings :
-    "properties.configurationProtectedSettings.${setting}" => sha256(value)
+    "properties.configurationProtectedSettings.${setting}" => sha256("${value}${jsonencode(local.flux_configuration_body)}")
   }
 
   depends_on = [azapi_resource.flux_extension]

@@ -614,8 +614,8 @@ run "a_private_github_repository_is_read_with_a_token" {
     error_message = "The token should be sent as the httpsKey protected setting."
   }
   assert {
-    condition     = nonsensitive(azapi_resource.flux_configuration[0].sensitive_body_version["properties.configurationProtectedSettings.httpsKey"]) == sha256(base64encode("github_pat_example"))
-    error_message = "The token should be sent again whenever it changes."
+    condition     = nonsensitive(azapi_resource.flux_configuration[0].sensitive_body_version["properties.configurationProtectedSettings.httpsKey"]) == sha256("${base64encode("github_pat_example")}${jsonencode(azapi_resource.flux_configuration[0].body)}")
+    error_message = "The token should be sent again whenever it or the rest of the configuration changes."
   }
 }
 

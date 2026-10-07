@@ -28,6 +28,18 @@ mock_provider "azurerm" {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/privateDnsZones/privatelink.swedencentral.azmk8s.io"
     }
   }
+  mock_data "azurerm_key_vault" {
+    defaults = {
+      id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-aks-test"
+      vault_uri                  = "https://kv-aks-test.vault.azure.net/"
+      rbac_authorization_enabled = true
+    }
+  }
+  mock_data "azurerm_dns_zone" {
+    defaults = {
+      id = "/subscriptions/55555555-5555-5555-5555-555555555555/resourceGroups/rg-dns/providers/Microsoft.Network/dnsZones/contoso.com"
+    }
+  }
   mock_resource "azurerm_user_assigned_identity" {
     defaults = {
       id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-test-identity"
@@ -43,7 +55,8 @@ mock_provider "time" {}
 override_module {
   target = module.aks
   outputs = {
-    resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test"
+    resource_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test"
+    oidc_issuer_profile_issuer_url = "https://swedencentral.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/11111111-1111-1111-1111-111111111111/"
     ingress_profile_application_load_balancer_identity = {
       clientId   = "33333333-3333-3333-3333-333333333333"
       objectId   = "44444444-4444-4444-4444-444444444444"
@@ -2568,8 +2581,134 @@ run "flux_is_told_nothing_it_has_no_value_for" {
   expect_failures = [check.application_gateway_for_containers_has_a_subnet]
 
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild == null
-    error_message = "With no subnet to tell Flux about, the platform Kustomization should be sent no post-build variables."
+    condition = alltrue([
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "agc_subnet_id"),
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "agc_subnet_cidr"),
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "tls_key_vault_url"),
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "dns_zone_name"),
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.cluster_name == "aks-test",
+    ])
+    error_message = "A variable the cluster has no value for should be left out, and the ones it does have still sent."
   }
+}
+
+# ----------------------------------------------------------------------------------------------
+# Listener certificates from Key Vault, hostnames in Azure DNS
+# ----------------------------------------------------------------------------------------------
+
+run "no_vault_and_no_zone_create_no_identities" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      length(azurerm_user_assigned_identity.tls_certificates) == 0,
+      length(azurerm_user_assigned_identity.external_dns) == 0,
+      length(azurerm_federated_identity_credential.tls_certificates) == 0,
+      length(azurerm_federated_identity_credential.external_dns) == 0,
+    ])
+    error_message = "Without a vault or a zone there is nothing to create identities for."
+  }
+}
+
+run "the_certificate_identity_reads_the_vault_as_its_service_account" {
+  command = plan
+
+  variables {
+    key_vault_name                = "kv-aks-test"
+    key_vault_resource_group_name = "rg-shared"
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_user_assigned_identity.tls_certificates[0].name == "id-sec-test-aks-tls",
+      azurerm_federated_identity_credential.tls_certificates[0].subject == "system:serviceaccount:ingress-gateway:keyvault-certificates",
+      azurerm_federated_identity_credential.tls_certificates[0].audience == tolist(["api://AzureADTokenExchange"]),
+      azurerm_role_assignment.tls_certificates[0].role_definition_name == "Key Vault Secrets User",
+      azurerm_role_assignment.tls_certificates[0].scope == data.azurerm_key_vault.tls[0].id,
+      data.azurerm_key_vault.tls[0].resource_group_name == "rg-shared",
+    ])
+    error_message = "The certificate identity should be federated with keyvault-certificates in ingress-gateway and read the vault's secrets."
+  }
+}
+
+run "external_dns_writes_the_zone_as_its_service_account" {
+  command = plan
+
+  variables {
+    dns_zone_name = "contoso.com"
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_user_assigned_identity.external_dns[0].name == "id-sec-test-aks-dns",
+      azurerm_federated_identity_credential.external_dns[0].subject == "system:serviceaccount:external-dns:external-dns",
+      azurerm_role_assignment.external_dns[0].role_definition_name == "DNS Zone Contributor",
+      azurerm_role_assignment.external_dns[0].scope == data.azurerm_dns_zone.this[0].id,
+      data.azurerm_dns_zone.this[0].resource_group_name == "rg-aks-test",
+    ])
+    error_message = "external-dns should be federated with its own service account and contribute to the zone, which defaults to the cluster's resource group."
+  }
+}
+
+run "vault_and_zone_grants_can_be_left_to_someone_else" {
+  command = plan
+
+  variables {
+    key_vault_name          = "kv-aks-test"
+    dns_zone_name           = "contoso.com"
+    create_role_assignments = false
+  }
+
+  assert {
+    condition = alltrue([
+      length(azurerm_role_assignment.tls_certificates) == 0,
+      length(azurerm_role_assignment.external_dns) == 0,
+      length(azurerm_user_assigned_identity.tls_certificates) == 1,
+      length(azurerm_user_assigned_identity.external_dns) == 1,
+    ])
+    error_message = "With create_role_assignments = false the identities are still created, and the grants left to the estate."
+  }
+}
+
+run "flux_is_told_where_the_certificates_and_the_zone_are" {
+  command = plan
+
+  variables {
+    key_vault_name = "kv-aks-test"
+    dns_zone_name  = "contoso.com"
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.tls_key_vault_url == "https://kv-aks-test.vault.azure.net/",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_name == "contoso.com",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_resource_group_name == "rg-aks-test",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_subscription_id == "55555555-5555-5555-5555-555555555555",
+    ])
+    error_message = "The platform Kustomization should be told the vault URL and where the zone is."
+  }
+}
+
+run "warns_about_a_vault_on_access_policies" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_key_vault.tls[0]
+    values = {
+      id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-aks-test"
+      vault_uri                  = "https://kv-aks-test.vault.azure.net/"
+      rbac_authorization_enabled = false
+    }
+  }
+
+  variables {
+    key_vault_name = "kv-aks-test"
+  }
+
+  expect_failures = [check.key_vault_uses_azure_rbac]
 }
 

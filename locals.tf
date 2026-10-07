@@ -22,14 +22,40 @@ locals {
   # variables of the `platform` Kustomization: the facts it cannot know on its own and should not
   # have copied into it by hand. clusters/<cluster>/ in the repository passes them on to whatever
   # needs them. A value the cluster does not have is left out rather than sent empty.
-  flux_cluster_settings = {
-    for name, value in {
-      # The subnet Application Gateway for Containers joins, for the ApplicationLoadBalancer that
-      # creates it, and its range, for the NetworkPolicies that let it reach the pods.
-      agc_subnet_id   = one(data.azurerm_subnet.application_gateway_for_containers[*].id)
-      agc_subnet_cidr = try(data.azurerm_subnet.application_gateway_for_containers[0].address_prefixes[0], null)
-    } : name => value if value != null
-  }
+  #
+  # Which variables there are follows from the inputs alone, never from the values: the client IDs
+  # are unknown until the identities exist, and a key that hangs on one would leave the whole set
+  # unknown at plan time.
+  flux_cluster_settings = merge(
+    {
+      cluster_name    = var.name
+      azure_tenant_id = data.azurerm_client_config.current.tenant_id
+    },
+    # The subnet Application Gateway for Containers joins, for the ApplicationLoadBalancer that
+    # creates it, and its range, for the NetworkPolicies that let it reach the pods.
+    var.application_gateway_for_containers_subnet_name == null ? {} : {
+      agc_subnet_id   = data.azurerm_subnet.application_gateway_for_containers[0].id
+      agc_subnet_cidr = data.azurerm_subnet.application_gateway_for_containers[0].address_prefixes[0]
+    },
+    # The Key Vault the listener certificates are synced from, and the identity that reads it.
+    var.key_vault_name == null ? {} : {
+      tls_key_vault_url      = data.azurerm_key_vault.tls[0].vault_uri
+      tls_identity_client_id = azurerm_user_assigned_identity.tls_certificates[0].client_id
+    },
+    # The DNS zone the listener hostnames are published in, and the identity that writes it.
+    var.dns_zone_name == null ? {} : {
+      dns_zone_name                = data.azurerm_dns_zone.this[0].name
+      dns_zone_resource_group_name = data.azurerm_dns_zone.this[0].resource_group_name
+      dns_zone_subscription_id     = split("/", data.azurerm_dns_zone.this[0].id)[2]
+      dns_identity_client_id       = azurerm_user_assigned_identity.external_dns[0].client_id
+    },
+  )
+
+  # The Kubernetes service accounts the two workload identities are federated with. They are created
+  # by the Flux repository, which has to use exactly these names and namespaces: a federated
+  # credential trusts one subject and nothing else.
+  tls_certificates_service_account = "system:serviceaccount:ingress-gateway:keyvault-certificates"
+  external_dns_service_account     = "system:serviceaccount:external-dns:external-dns"
 
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges

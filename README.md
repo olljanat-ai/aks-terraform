@@ -46,6 +46,9 @@ These must exist before running Terraform:
   See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
+- A **Key Vault** on the Azure RBAC permission model holding the Gateway's TLS certificates, and the
+  public **Azure DNS zone** its hostnames are published in - only where `key_vault_name` and
+  `dns_zone_name` name them. See [Certificates and DNS](#certificates-and-dns).
 
 `envs/prototype-automatic.tfvars` needs none of the network pieces: it names a resource group and
 nothing else about the existing estate. `envs/prototype-free.tfvars` needs all of them.
@@ -542,6 +545,31 @@ Traffic reaches the pods from addresses in that subnet, not from a namespace ins
 a managed namespace that keeps its default closed ingress has to let the subnet's range in with a
 `NetworkPolicy` of its own.
 
+### Certificates and DNS
+
+Application Gateway for Containers terminates TLS with certificates it reads from Kubernetes
+Secrets, and has no Key Vault or DNS integration of its own - AKS's, through the App Routing
+operator, serves the Istio based GatewayClasses only. So both are done from inside the cluster, by
+workloads the Flux repository deploys, each acting as an identity created here:
+
+| Variable | Identity | Federated with | Granted |
+| --- | --- | --- | --- |
+| `key_vault_name` | `<cluster identity>-tls` | `ingress-gateway/keyvault-certificates` - External Secrets Operator syncs each certificate into the listener's Secret | `Key Vault Secrets User` on the vault |
+| `dns_zone_name` | `<cluster identity>-dns` | `external-dns/external-dns` - keeps a CNAME per listener hostname, pointing at the Gateway's AGC frontend | `DNS Zone Contributor` on the zone |
+
+Both already exist and are only looked up, in `resource_group_name` unless
+`key_vault_resource_group_name` and `dns_zone_resource_group_name` say otherwise. Leave either
+unset and that half is not set up at all.
+
+- **The certificates are put in the vault by hand** - `az keyvault certificate import`, or a
+  certificate the vault issues through an integrated CA. A new version is picked up within the hour.
+- **The certificate's private key is only readable as the secret behind it**, so the identity is a
+  Secrets User, which reads every secret in the vault. Keep the vault to the certificates the
+  cluster serves.
+- **The vault has to use Azure RBAC.** One on access policies never consults the role assignment,
+  and Terraform warns on every plan for it.
+- **A hostname cannot be the zone apex**, since the record is a CNAME.
+
 [agc]: https://learn.microsoft.com/azure/application-gateway/for-containers/overview
 [agcaddon]: https://learn.microsoft.com/azure/application-gateway/for-containers/quickstart-deploy-application-gateway-for-containers-alb-controller-addon
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
@@ -572,9 +600,12 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | --- | --- |
 | `agc_subnet_id` | Resource ID of `application_gateway_for_containers_subnet_name`, for the `ApplicationLoadBalancer`. |
 | `agc_subnet_cidr` | Its address range, for the `NetworkPolicy`s that let Application Gateway for Containers reach the pods. |
+| `tls_key_vault_url`, `tls_identity_client_id` | The vault of `key_vault_name` and the identity that reads it. |
+| `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id`, `dns_identity_client_id` | The zone of `dns_zone_name` and the identity that writes it. |
+| `cluster_name`, `azure_tenant_id` | Always sent. |
 
-A variable the cluster has no value for - both of these, on a cluster that brings no network - is
-left out rather than sent empty. They apply to what `path` holds itself; the repository passes them
+A variable the cluster has no value for - the subnet's, on a cluster that brings no network, or
+those of a vault or zone that is not named - is left out rather than sent empty. They apply to what `path` holds itself; the repository passes them
 on from there to whatever needs them.
 
 [postbuild]: https://fluxcd.io/flux/components/kustomize/kustomizations/#post-build-variable-substitution

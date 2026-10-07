@@ -1436,7 +1436,7 @@ run "a_namespace_closes_ingress_to_itself_and_leaves_egress_open" {
     error_message = "A managed namespace belongs to the cluster."
   }
   assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].type == "Microsoft.ContainerService/managedClusters/managedNamespaces@2026-03-01"
+    condition     = azapi_resource.managed_namespace["team-payments"].type == "Microsoft.ContainerService/managedClusters/managedNamespaces@2025-09-02-preview"
     error_message = "The namespace should use the same AKS API version as everything else written directly."
   }
   assert {

@@ -41,9 +41,9 @@ locals {
     },
     # The DNS zone the listener hostnames are published in, and the identity that writes it.
     var.dns_zone_name == null ? {} : {
-      dns_zone_name                = data.azurerm_dns_zone.this[0].name
-      dns_zone_resource_group_name = data.azurerm_dns_zone.this[0].resource_group_name
-      dns_zone_subscription_id     = split("/", data.azurerm_dns_zone.this[0].id)[2]
+      dns_zone_name                = var.dns_zone_name
+      dns_zone_resource_group_name = local.dns_zone_resource_group_name
+      dns_zone_subscription_id     = split("/", local.dns_zone_id)[2]
       dns_identity_client_id       = azurerm_user_assigned_identity.external_dns[0].client_id
     },
   )
@@ -85,6 +85,10 @@ locals {
   # service account of this name.
   key_vault_service_account    = "key-vault"
   external_dns_service_account = "system:serviceaccount:external-dns:external-dns"
+
+  # The public DNS zone, whether looked up or created here. Null when no zone is named.
+  dns_zone_resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
+  dns_zone_id                  = one(concat(data.azurerm_dns_zone.this[*].id, azurerm_dns_zone.this[*].id))
 
   # The Key Vault is created for a cluster that names one.
   key_vault_enabled = var.key_vault_name != null

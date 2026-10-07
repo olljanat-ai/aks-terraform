@@ -24,11 +24,11 @@ virtual_network_resource_group_name = "rg-network"
 # another if this one is taken.
 key_vault_name = "kv-proto-aks-free"
 
-# Where the Gateway's hostnames are published. The zone exists already; the cluster gets an identity
-# federated with external-dns's service account, and the Flux repository is told where the zone is.
-# TODO: name the zone.
-# dns_zone_name                 = "contoso.com"
-# dns_zone_resource_group_name  = "rg-..."
+# Where the Gateway's hostnames are published. The zone is created here, in resource_group_name; the
+# cluster gets an identity federated with external-dns's service account, and the Flux repository is
+# told where the zone is. Point the domain's NS records at the dns_zone_name_servers output.
+dns_zone_name   = "onek8s.lol"
+dns_zone_create = true
 
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"

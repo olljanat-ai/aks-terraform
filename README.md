@@ -46,7 +46,7 @@ These must exist before running Terraform:
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
 - The public **Azure DNS zone** the Gateway's hostnames are published in - only where
-  `dns_zone_name` names it. See [Certificates and DNS](#certificates-and-dns). The Key Vault is not a
+  `dns_zone_name` names it, and not when `dns_zone_create` has it created here. See [Certificates and DNS](#certificates-and-dns). The Key Vault is not a
   prerequisite: it is created here - see [Key Vault](#key-vault).
 
 `envs/prototype-automatic.tfvars` needs none of the network pieces: it names a resource group and
@@ -544,9 +544,11 @@ deploys, each acting as an identity created here:
   CA. A new version is picked up within the hour.
 - **DNS**: with `dns_zone_name` set, `<cluster identity>-dns` is federated with
   `external-dns/external-dns` and granted `DNS Zone Contributor` on the zone. external-dns keeps an A
-  record per listener hostname, pointing at the Gateway's internal load balancer IP. The zone exists
-  already and is looked up in `resource_group_name` unless `dns_zone_resource_group_name` says
-  otherwise. **The zone answers with a private address**: a public zone then tells anyone who asks
+  record per listener hostname, pointing at the Gateway's internal load balancer IP. The zone is
+  looked up in `resource_group_name` unless `dns_zone_resource_group_name` says otherwise - or, with
+  `dns_zone_create = true`, created there. A created zone answers nothing until the domain's
+  registrar delegates to it: set the domain's NS records to the `dns_zone_name_servers` output
+  (`terraform output dns_zone_name_servers`). **The zone answers with a private address**: a public zone then tells anyone who asks
   the internal IP of the Gateway, which only resolves to something reachable from inside the network.
 
 ## Key Vault

@@ -1,3 +1,11 @@
+output "dns_zone_name_servers" {
+  description = <<DESCRIPTION
+Name servers of the DNS zone created here, to set as the domain's NS records at its registrar. Null
+unless `dns_zone_create` is set.
+DESCRIPTION
+  value       = one(azurerm_dns_zone.this[*].name_servers)
+}
+
 output "fqdn" {
   description = "Public FQDN of the API server. Null for a private cluster without a public FQDN."
   value       = module.aks.fqdn

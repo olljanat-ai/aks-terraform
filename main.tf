@@ -54,6 +54,34 @@ resource "azurerm_dns_zone" "this" {
   resource_group_name = local.dns_zone_resource_group_name
 }
 
+# The private zone the Gateway's hostnames are also published in, for names that only exist inside
+# the network. Like the public zone it is either looked up or created here; a zone created here is
+# linked to the cluster's network, so the nodes - and everything else in the network - resolve it.
+# An existing zone is expected to be linked already, to whichever networks should see it.
+data "azurerm_private_dns_zone" "internal" {
+  count = var.internal_dns_zone_name != null && !var.internal_dns_zone_create ? 1 : 0
+
+  name                = var.internal_dns_zone_name
+  resource_group_name = local.internal_dns_zone_resource_group_name
+}
+
+resource "azurerm_private_dns_zone" "internal" {
+  count = var.internal_dns_zone_name != null && var.internal_dns_zone_create ? 1 : 0
+
+  name                = var.internal_dns_zone_name
+  resource_group_name = local.internal_dns_zone_resource_group_name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "internal" {
+  count = var.internal_dns_zone_name != null && var.internal_dns_zone_create && local.byo_network ? 1 : 0
+
+  name                  = var.name
+  private_dns_zone_name = azurerm_private_dns_zone.internal[0].name
+  resource_group_name   = local.internal_dns_zone_resource_group_name
+  virtual_network_id    = data.azurerm_virtual_network.this[0].id
+  registration_enabled  = false
+}
+
 data "azurerm_private_dns_zone" "this" {
   count = local.use_byo_private_dns_zone ? 1 : 0
 
@@ -324,14 +352,15 @@ resource "azurerm_role_assignment" "entra_reader" {
   principal_type       = "Group"
 }
 
-# The identity external-dns publishes the Gateway's hostnames as, federated with the one Kubernetes
-# service account that acts as it - see local.external_dns_service_account. Named after the cluster
-# identity with what it does appended, and created only for a zone that is named. The identities
-# that read Key Vault, one per namespace, are in key_vault.tf.
+# The identity external-dns publishes the Gateway's hostnames as, federated with the Kubernetes
+# service accounts that act as it - one per zone, see local.external_dns_service_account and
+# local.external_dns_internal_service_account. Named after the cluster identity with what it does
+# appended, and created only for a zone that is named. The identities that read Key Vault, one per
+# namespace, are in key_vault.tf.
 #
-# external-dns keeps an A record in the zone for every hostname a Gateway listener serves.
+# external-dns keeps an A record in each zone for every hostname a Gateway listener serves in it.
 resource "azurerm_user_assigned_identity" "external_dns" {
-  count = var.dns_zone_name == null ? 0 : 1
+  count = local.external_dns_enabled ? 1 : 0
 
   location            = var.location
   name                = "${local.managed_identity_name}-dns"
@@ -354,6 +383,27 @@ resource "azurerm_role_assignment" "external_dns" {
   principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
   scope                = local.dns_zone_id
   role_definition_name = "DNS Zone Contributor"
+  principal_type       = "ServicePrincipal"
+}
+
+# The private zone is written by a second external-dns release - its Azure provider handles public
+# or private zones, never both - as the same identity, through a service account of its own.
+resource "azurerm_federated_identity_credential" "external_dns_internal" {
+  count = var.internal_dns_zone_name == null ? 0 : 1
+
+  name                      = "aks-${var.name}-internal"
+  user_assigned_identity_id = azurerm_user_assigned_identity.external_dns[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_profile_issuer_url
+  subject                   = local.external_dns_internal_service_account
+}
+
+resource "azurerm_role_assignment" "external_dns_internal" {
+  count = var.create_role_assignments && var.internal_dns_zone_name != null ? 1 : 0
+
+  principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
+  scope                = local.internal_dns_zone_id
+  role_definition_name = "Private DNS Zone Contributor"
   principal_type       = "ServicePrincipal"
 }
 
@@ -436,6 +486,17 @@ check "entra_groups_are_granted_somewhere" {
   assert {
     condition     = var.create_role_assignments || !local.azure_rbac_enabled || length(var.entra_admin_group_object_ids) + length(var.entra_reader_group_object_ids) == 0
     error_message = "${var.name} has create_role_assignments = false, so the Entra ID groups listed for it are not granted anything here. Assign Azure Kubernetes Service RBAC Cluster Admin to entra_admin_group_object_ids and Azure Kubernetes Service RBAC Reader to entra_reader_group_object_ids on the cluster wherever the role assignments of this estate are managed."
+  }
+}
+
+# A private zone created here is linked to the cluster's network so that it resolves there. A cluster
+# on the network AKS manages has none to link it to - its network is created with the cluster, in
+# the node resource group - and the hostnames published in the zone resolve nowhere until someone
+# links it by hand.
+check "internal_dns_zone_is_linked" {
+  assert {
+    condition     = !var.internal_dns_zone_create || local.byo_network
+    error_message = "${var.name} creates the private zone ${coalesce(var.internal_dns_zone_name, "of internal_dns_zone_name")} but brings no virtual network to link it to, so nothing resolves its names. Attach the cluster to an existing network (virtual_network_name), or link the zone to the network AKS creates by hand."
   }
 }
 

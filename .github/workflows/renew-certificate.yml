@@ -1,16 +1,19 @@
 name: Renew Certificate
 
-# Issuance and renewal of the certificate the internal Gateway's `https-example` listener serves:
+# Issuance and renewal of the certificates the internal Gateway's listeners serve - one job per
+# certificate, `hello-example` (`https-example`, hello.onek8s.lol) and `traefik-dashboard`
+# (`https-traefik`, traefik.onek8s.lol) on the schedule, the one given when run by hand:
 #
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> Key Vault --> External Secrets --> Traefik
 #
 # The certificate is imported into the cluster's Key Vault as `ingress-gateway--<name>` - the share of
 # the vault that belongs to ingress-gateway (README, "Key Vault"). olljanat-ai/aks-fluxcd-platform
-# reads it from there with an ExternalSecret (infrastructure/certificates/https-example-tls.yaml) that
+# reads it from there with an ExternalSecret (infrastructure/certificates/https-<listener>-tls.yaml) that
 # unpacks the secret behind the certificate as a PKCS#12 bundle, and turns it into the
 # `kubernetes.io/tls` Secret the listener names. So two things here are not free to change:
 #
-#   - the name: `ingress-gateway--` + `example_certificate_name` of the platform's cluster-settings.
+#   - the name: `ingress-gateway--` + `example_certificate_name` (or `traefik_certificate_name`) of
+#     the platform's cluster-settings.
 #   - the format: the certificate is imported as PKCS#12, never as PEM. A certificate's secret keeps
 #     the content type it was imported with, and a PEM one is not what the ExternalSecret unpacks.
 #
@@ -49,12 +52,12 @@ on:
         type: choice
         options: [prototype-free, prototype-automatic, prototype-prd-economy]
       domains:
-        description: "Comma-separated SANs. The platform's example_hostname must be one of them"
+        description: "Comma-separated SANs. The platform's hostname of the listener must be one of them"
         required: false
         default: "hello.onek8s.lol"
         type: string
       certificate_name:
-        description: "The platform's example_certificate_name; imported as ingress-gateway--<this>"
+        description: "The platform's <listener>_certificate_name; imported as ingress-gateway--<this>"
         required: false
         default: "hello-example"
         type: string
@@ -75,15 +78,22 @@ permissions:
 
 jobs:
   renew:
-    name: ingress-gateway--${{ inputs.certificate_name || 'hello-example' }} (${{ inputs.environment || 'prototype-free' }})
+    name: ingress-gateway--${{ matrix.certificate_name }} (${{ inputs.environment || 'prototype-free' }})
     runs-on: ubuntu-latest
+    # The schedule renews every certificate the platform's listeners serve; a run by hand, the one it
+    # is given. A certificate that fails does not hold back the others.
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"hello.onek8s.lol","certificate_name":"hello-example"},{"domains":"traefik.onek8s.lol","certificate_name":"traefik-dashboard"}]') }}
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
     environment: ${{ inputs.environment || 'prototype-free' }}
     concurrency:
-      # One issuance at a time per environment; never cancel a run mid-order, it would leave the
-      # DNS-01 TXT records behind.
+      # One issuance at a time per environment - the certificates of one run take turns, and share
+      # one ACME account - and never cancel a run mid-order, it would leave the DNS-01 TXT records
+      # behind.
       group: renew-certificate-${{ inputs.environment || 'prototype-free' }}
       cancel-in-progress: false
     env:
@@ -102,8 +112,8 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       # Certificate identity and renewal policy. The `ingress-gateway--` prefix is what puts the
       # certificate in ingress-gateway's share of the vault, where its SecretStore reads it.
-      DOMAINS: ${{ inputs.domains || 'hello.onek8s.lol' }}
-      CERT_NAME: ingress-gateway--${{ inputs.certificate_name || 'hello-example' }}
+      DOMAINS: ${{ matrix.domains }}
+      CERT_NAME: ingress-gateway--${{ matrix.certificate_name }}
       ACME_SERVER: ${{ inputs.acme_server || 'letsencrypt' }}
       ACME_EMAIL: ${{ vars.LETSENCRYPT_EMAIL }}
       # An ACME account belongs to one directory: production and staging know nothing of each other's

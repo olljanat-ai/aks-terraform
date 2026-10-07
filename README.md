@@ -18,6 +18,7 @@ left out: name none, and AKS creates and manages one for the cluster instead, wh
 | Path | Purpose |
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
+| `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
 | `envs/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. |
 | `envs/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades - the virtual network included, since this cluster brings none of its own. Runs on the Standard tier, which Automatic requires, and with a public API server. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -44,9 +45,9 @@ These must exist before running Terraform:
   See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
-- A **Key Vault** on the Azure RBAC permission model holding the Gateway's TLS certificates, and the
-  public **Azure DNS zone** its hostnames are published in - only where `key_vault_name` and
-  `dns_zone_name` name them. See [Certificates and DNS](#certificates-and-dns).
+- The public **Azure DNS zone** the Gateway's hostnames are published in - only where
+  `dns_zone_name` names it. See [Certificates and DNS](#certificates-and-dns). The Key Vault is not a
+  prerequisite: it is created here - see [Key Vault](#key-vault).
 
 `envs/prototype-automatic.tfvars` needs none of the network pieces: it names a resource group and
 nothing else about the existing estate. `envs/prototype-free.tfvars` needs all of them.
@@ -533,27 +534,65 @@ managed namespace that keeps its default closed ingress lets the `traefik` names
 
 The Gateway terminates TLS with certificates it reads from Kubernetes Secrets, and Traefik has no Key
 Vault or Azure DNS integration of its own - AKS's, through the App Routing operator, serves the Istio
-based GatewayClasses only. So both are done from inside the cluster, by
-workloads the Flux repository deploys, each acting as an identity created here:
+based GatewayClasses only. So both are done from inside the cluster, by workloads the Flux repository
+deploys, each acting as an identity created here:
 
-| Variable | Identity | Federated with | Granted |
-| --- | --- | --- | --- |
-| `key_vault_name` | `<cluster identity>-tls` | `ingress-gateway/keyvault-certificates` - External Secrets Operator syncs each certificate into the listener's Secret | `Key Vault Secrets User` on the vault |
-| `dns_zone_name` | `<cluster identity>-dns` | `external-dns/external-dns` - keeps an A record per listener hostname, pointing at the Gateway's internal load balancer IP | `DNS Zone Contributor` on the zone |
+- **Certificates** are kept in the cluster's [Key Vault](#key-vault) as `ingress-gateway--<name>` -
+  the share of the vault that belongs to `ingress-gateway`. External Secrets Operator syncs each into
+  the Secret its listener names, as `ingress-gateway/key-vault`. They are put in the vault by hand -
+  `az keyvault certificate import`, by an admin group - or issued by the vault through an integrated
+  CA. A new version is picked up within the hour.
+- **DNS**: with `dns_zone_name` set, `<cluster identity>-dns` is federated with
+  `external-dns/external-dns` and granted `DNS Zone Contributor` on the zone. external-dns keeps an A
+  record per listener hostname, pointing at the Gateway's internal load balancer IP. The zone exists
+  already and is looked up in `resource_group_name` unless `dns_zone_resource_group_name` says
+  otherwise. **The zone answers with a private address**: a public zone then tells anyone who asks
+  the internal IP of the Gateway, which only resolves to something reachable from inside the network.
 
-Both already exist and are only looked up, in `resource_group_name` unless
-`key_vault_resource_group_name` and `dns_zone_resource_group_name` say otherwise. Leave either
-unset and that half is not set up at all.
+## Key Vault
 
-- **The certificates are put in the vault by hand** - `az keyvault certificate import`, or a
-  certificate the vault issues through an integrated CA. A new version is picked up within the hour.
-- **The certificate's private key is only readable as the secret behind it**, so the identity is a
-  Secrets User, which reads every secret in the vault. Keep the vault to the certificates the
-  cluster serves.
-- **The vault has to use Azure RBAC.** One on access policies never consults the role assignment,
-  and Terraform warns on every plan for it.
-- **The zone answers with a private address.** A public zone then tells anyone who asks the
-  internal IP of the Gateway, which only resolves to something reachable from inside the network.
+`key_vault_name` creates one Key Vault for the cluster, in `resource_group_name`, on the Azure RBAC
+permission model. Every namespace keeps its secrets in it, and reads only its own: the namespaces
+are kept apart by the names of the secrets, with [Azure ABAC conditions][kvabac] on the role
+assignments.
+
+**A namespace owns the secrets named `<namespace>--<name>`** - `example--api-key`,
+`ingress-gateway--hello-example`. The namespaces with a share are every managed namespace and the ones
+in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (listener certificates)
+and `traefik` (the Traefik Hub license).
+
+| Who | Role on the vault | Condition |
+| --- | --- | --- |
+| The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` | `Key Vault Secrets User` | Reads the value of a secret only if it is the namespace's own |
+| The namespace's `writer` and `admin` grants in `managed_namespaces` | `Key Vault Secrets Officer` | Creates, changes, deletes, backs up, restores, recovers and purges the namespace's own secrets only |
+| `entra_admin_group_object_ids` | `Key Vault Administrator` | None: the whole vault, certificates included |
+
+In the cluster, each namespace with a share has a `key-vault` service account - created by the Flux
+repository - and a `SecretStore` naming it. External Secrets Operator has no Azure identity of its
+own: it requests a token for that service account on every read, so a namespace's store reads that
+namespace's secrets and no others, and a namespace's `writer` can put a secret in the vault for it
+without anyone else's help.
+
+```sh
+az keyvault secret set --vault-name <key_vault_name> --name example--api-key --value ...
+```
+
+- **Names, not values, are shared.** Listing the vault is not covered by a condition - Key Vault
+  evaluates one on a list call as a whole rather than secret by secret, and a name condition there
+  refuses the list - so every identity with a role on the vault can see every secret's name. Keep
+  secrets out of the names. An `ExternalSecret` that finds secrets by pattern rather than by name
+  has to match the namespace's own prefix, or it is refused reading the rest.
+- **A namespace name with `--` in it is refused**, since its prefix would overlap another's:
+  `team--a--x` starts with `team--`.
+- **Certificates are imported by an admin group.** Conditions cover secret operations only, so a
+  namespace's writers manage secrets; a certificate's private key is read as the secret behind it,
+  under the same name, so the namespace's identity reads its own certificates as well.
+- **Key Vault ABAC is in preview.**
+- The vault is reached over its public endpoint, authenticated with Entra ID. A deleted secret can
+  be recovered for 90 days; purge protection is off, so the vault of a cluster that is torn down can
+  be purged and its name reused.
+
+[kvabac]: https://learn.microsoft.com/azure/key-vault/general/rbac-abac
 
 [agcaddon]: https://learn.microsoft.com/azure/application-gateway/for-containers/quickstart-deploy-application-gateway-for-containers-alb-controller-addon
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
@@ -584,7 +623,7 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 
 | Variable | Value |
 | --- | --- |
-| `tls_key_vault_url`, `tls_identity_client_id` | The vault of `key_vault_name` and the identity that reads it. |
+| `key_vault_url`, `key_vault_client_id_<namespace>` | The vault of `key_vault_name`, and for each namespace with a share of it the identity its `key-vault` service account reads it as - the namespace's hyphens as underscores, `key_vault_client_id_ingress_gateway`. |
 | `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id`, `dns_identity_client_id` | The zone of `dns_zone_name` and the identity that writes it. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 

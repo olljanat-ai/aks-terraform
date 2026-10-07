@@ -31,10 +31,13 @@ locals {
       cluster_name    = var.name
       azure_tenant_id = data.azurerm_client_config.current.tenant_id
     },
-    # The Key Vault the listener certificates are synced from, and the identity that reads it.
-    var.key_vault_name == null ? {} : {
-      tls_key_vault_url      = data.azurerm_key_vault.tls[0].vault_uri
-      tls_identity_client_id = azurerm_user_assigned_identity.tls_certificates[0].client_id
+    # The cluster's Key Vault, and for each namespace with a share of it the identity that reads
+    # that share: `key_vault_client_id_<namespace>`, the namespace's hyphens as underscores, since a
+    # Flux variable name has no hyphens.
+    local.key_vault_enabled ? { key_vault_url = azurerm_key_vault.this[0].vault_uri } : {},
+    {
+      for namespace in local.key_vault_namespaces :
+      "key_vault_client_id_${replace(namespace, "-", "_")}" => azurerm_user_assigned_identity.key_vault[namespace].client_id
     },
     # The DNS zone the listener hostnames are published in, and the identity that writes it.
     var.dns_zone_name == null ? {} : {
@@ -76,11 +79,89 @@ locals {
   }
 
 
-  # The Kubernetes service accounts the two workload identities are federated with. They are created
-  # by the Flux repository, which has to use exactly these names and namespaces: a federated
-  # credential trusts one subject and nothing else.
-  tls_certificates_service_account = "system:serviceaccount:ingress-gateway:keyvault-certificates"
-  external_dns_service_account     = "system:serviceaccount:external-dns:external-dns"
+  # The Kubernetes service accounts the workload identities are federated with. They are created by
+  # the Flux repository, which has to use exactly these names and namespaces: a federated credential
+  # trusts one subject and nothing else. Every namespace with a share of the Key Vault reads it as a
+  # service account of this name.
+  key_vault_service_account    = "key-vault"
+  external_dns_service_account = "system:serviceaccount:external-dns:external-dns"
+
+  # The Key Vault is created for a cluster that names one.
+  key_vault_enabled = var.key_vault_name != null
+
+  # The namespaces with a share of the vault: every managed namespace, and the ones the platform
+  # creates itself that key_vault_namespaces names. None without a vault.
+  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces))) : toset([])
+
+  # The share of each: the secrets whose names start with this. Key Vault names are case-insensitive
+  # and compared in lowercase, which a namespace name already is.
+  key_vault_secret_prefixes = { for namespace in local.key_vault_namespaces : namespace => "${namespace}--" }
+
+  # Azure ABAC conditions (version 2.0) holding a role assignment on the vault to one namespace's
+  # secrets. A condition applies to the actions it names and leaves the rest of the role alone, so
+  # each says: for these actions, only a secret under the prefix. An existing secret is matched by its
+  # name as a resource; one being created or restored, which does not exist yet, by the name in the
+  # request.
+  #
+  # Reading the value of a secret - `Key Vault Secrets User`. Listing the vault is not gated; see
+  # key_vault_namespace_reader.
+  key_vault_read_conditions = {
+    for namespace, prefix in local.key_vault_secret_prefixes : namespace => <<-CONDITION
+      (
+       (
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
+       )
+       OR
+       (
+        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
+       )
+      )
+    CONDITION
+  }
+
+  # Everything `Key Vault Secrets Officer` can do to a secret, apart from listing them.
+  key_vault_write_conditions = {
+    for namespace, prefix in local.key_vault_secret_prefixes : namespace => <<-CONDITION
+      (
+       (
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/update/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/delete'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/backup/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/recover/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/purge/action'})
+       )
+       OR
+       (
+        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
+       )
+      )
+      AND
+      (
+       (
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/setSecret/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/restore/action'})
+       )
+       OR
+       (
+        @Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
+       )
+      )
+    CONDITION
+  }
+
+  # The namespace grants that come with the namespace's secrets: whoever may write in the namespace
+  # manages its share of the vault as well. Keyed like the grants they come from.
+  key_vault_writer_role_assignments = var.create_role_assignments && local.key_vault_enabled ? {
+    for key, grant in local.managed_namespace_access_grants : key => grant
+    if contains(["admin", "writer"], grant.role)
+  } : {}
 
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges

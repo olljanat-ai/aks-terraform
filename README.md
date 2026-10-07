@@ -653,8 +653,18 @@ flux_git_repository = {
 
 That installs the Flux cluster extension (`microsoft.flux`) into `flux-system`, kept on the newest
 minor version of the `Stable` release train, and creates a Flux configuration named `platform` that
-reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300). Flux prunes what
-is removed from the repository.
+reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300; `prototype-free`
+reads every 60) and retries a failed run at the same interval. Flux prunes what is removed from the
+repository. `platform` runs no health checks of its own (`wait = false`): it applies what `path`
+holds - in practice the cluster's own Flux Kustomizations, each waiting for its objects - and is
+done, so a commit is never held back behind one of them that is unhealthy.
+
+With `flux_github_webhook = true` the repository can also be told about a push as it happens: a
+token is generated and kept in the vault as `flux-system--github-webhook-token`, `flux-system` gets a
+share of the vault to read it with (`key_vault_client_id_flux_system`), and the Flux repository
+publishes a GitHub webhook receiver that checks deliveries against it. The repository's webhook in
+GitHub is then set once, with that token as its secret - olljanat-ai/aks-fluxcd-platform's README,
+"Webhook", has the URL. `prototype-free` turns it on.
 
 The `platform` Kustomization is also given the Azure facts the repository cannot know on its own, as
 Flux [post-build variables][postbuild], so they are never copied into it by hand:

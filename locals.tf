@@ -68,10 +68,15 @@ locals {
       }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
       kustomizations = {
         platform = {
-          path                   = try(var.flux_git_repository.path, null)
-          prune                  = true
-          syncIntervalInSeconds  = try(var.flux_git_repository.sync_interval_seconds, null)
-          retryIntervalInSeconds = 900
+          path                  = try(var.flux_git_repository.path, null)
+          prune                 = true
+          syncIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
+          # A failed run is retried as often as the repository is read, not after a quarter of an hour.
+          retryIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
+          # No health checks: `platform` applies the Kustomizations of clusters/<cluster>/ and is done,
+          # and each of those waits for its own objects. Waiting here as well kept every new commit
+          # queued behind whichever of them was unhealthy, for up to the full timeout.
+          wait = false
           postBuild = {
             substitute = local.flux_cluster_settings
           }
@@ -108,7 +113,10 @@ locals {
 
   # The namespaces with a share of the vault: every managed namespace, and the ones the platform
   # creates itself that key_vault_namespaces names. None without a vault.
-  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces))) : toset([])
+  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces), local.flux_github_webhook_enabled ? ["flux-system"] : [])) : toset([])
+
+  # The Flux GitHub webhook's token lives in the vault, for the Receiver in flux-system to read.
+  flux_github_webhook_enabled = var.flux_github_webhook && local.flux_enabled && local.key_vault_enabled
 
   # The share of each: the secrets whose names start with this. Key Vault names are case-insensitive
   # and compared in lowercase, which a namespace name already is.

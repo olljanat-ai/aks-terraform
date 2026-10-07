@@ -92,3 +92,22 @@ resource "azurerm_role_assignment" "key_vault_admin" {
   role_definition_name = "Key Vault Administrator"
   principal_type       = "Group"
 }
+
+# The token GitHub signs the Flux webhook's deliveries with, and the Receiver checks them against:
+# generated here, kept in flux-system's share of the vault, and set by hand as the secret of the
+# repository's webhook (see the README, "Flux"). The vault, not this state, is where it is read from.
+resource "random_password" "flux_github_webhook" {
+  count = local.flux_github_webhook_enabled ? 1 : 0
+
+  length  = 40
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "flux_github_webhook" {
+  count = local.flux_github_webhook_enabled ? 1 : 0
+
+  key_vault_id = azurerm_key_vault.this[0].id
+  name         = "flux-system--github-webhook-token"
+  value        = random_password.flux_github_webhook[0].result
+  content_type = "text/plain"
+}

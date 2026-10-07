@@ -51,6 +51,10 @@ api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 entra_admin_group_object_ids  = ["2c406e00-7a2a-447a-a617-ff0c907380e3"]
 entra_reader_group_object_ids = []
 
+# No Azure Policy add-on: its Gatekeeper alone asks for 360m CPU and 868Mi of memory, a fifth of
+# the single B2s node, and nothing in this prototype is governed by policy.
+azure_policy_enabled = false
+
 default_node_pool = {
   vm_size             = "Standard_B2s"
   enable_auto_scaling = false
@@ -96,4 +100,11 @@ flux_git_repository = {
   url    = "https://github.com/olljanat-ai/aks-fluxcd-platform"
   branch = "main"
   path   = "./clusters/prototype"
+  # Read every minute rather than every five, so a merged change reaches the cluster within one.
+  sync_interval_seconds = 60
 }
+
+# A GitHub push reaches the cluster at once: the platform repository publishes Flux's webhook
+# receiver (flux-webhook.onek8s.lol), and its token is created in the Key Vault here. Set the
+# repository's webhook to it once - see the README, "Flux".
+flux_github_webhook = true

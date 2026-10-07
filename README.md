@@ -550,19 +550,19 @@ based GatewayClasses only. So both are done from inside the cluster, by workload
 deploys, each acting as an identity created here:
 
 - **Certificates** are kept in the cluster's [Key Vault](#key-vault) as `ingress-gateway--<name>` -
-  the share of the vault that belongs to `ingress-gateway`. External Secrets Operator syncs each into
-  the Secret its listener names, as `ingress-gateway/key-vault`, unpacking the secret behind the
+  the share of the vault that belongs to `ingress-gateway`. External Secrets Operator syncs it into
+  the Secret the listeners name, as `ingress-gateway/key-vault`, unpacking the secret behind the
   certificate as PKCS#12 - so a certificate is imported as a `.pfx`, never as PEM. A new version is
   picked up within the hour.
 
-  The `https-example` listener's certificate, `ingress-gateway--hello-example` (hello.onek8s.lol),
-  and the `https-traefik` listener's - Traefik's dashboard - `ingress-gateway--traefik-dashboard`
-  (traefik.onek8s.lol), are issued and renewed by the
-  [Renew Certificate](.github/workflows/renew-certificate.yml) workflow, one job each: Let's Encrypt, with
-  the DNS-01 challenge solved in the environment's `dns_zone_name`, imported into its
-  `key_vault_name` - both read from `envs/<environment>.tfvars`. It runs monthly for
-  `prototype-free` and renews when fewer than 30 days are left; run it by hand for another
-  environment, other domains or the staging CA. It needs the variables `AZURE_CLIENT_ID`,
+  Every listener serves one wildcard certificate, `ingress-gateway--wildcard`
+  (`*.onek8s.lol` and `*.internal.onek8s.lol`), issued and renewed by the
+  [Renew Certificate](.github/workflows/renew-certificate.yml) workflow: Let's Encrypt, with the
+  DNS-01 challenge solved in the environment's `dns_zone_name` - the private zone's names too, since
+  their `_acme-challenge` records go in the public zone above it - imported into its
+  `key_vault_name`, both read from `envs/<environment>.tfvars`. It runs monthly for `prototype-free`,
+  and whenever the workflow changes on `main`, and renews when fewer than 30 days are left; run it
+  by hand for another environment, other domains or the staging CA. It needs the variables `AZURE_CLIENT_ID`,
   `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` and `LETSENCRYPT_EMAIL` and the secret
   `AZURE_CLIENT_SECRET`, for a service principal holding `Key Vault Certificates Officer` and
   `Key Vault Secrets Officer` on the vault and `DNS Zone Contributor` on the zone. The Let's Encrypt
@@ -585,8 +585,8 @@ deploys, each acting as an identity created here:
   `internal_dns_zone_create = true`, created there and linked to the cluster's virtual network
   (which takes one: a cluster on the network AKS manages has nothing to link it to, and Terraform
   warns). In `prototype-free` the zone is `internal.onek8s.lol`, a subdomain of the public zone:
-  inside the network it is answered by the private zone, outside by nothing. Its listeners serve the
-  public hostname's certificate, so a client sees a name mismatch there.
+  inside the network it is answered by the private zone, outside by nothing. The wildcard certificate
+  covers its hostnames as well.
 
 ## Key Vault
 
@@ -596,7 +596,7 @@ are kept apart by the names of the secrets, with [Azure ABAC conditions][kvabac]
 assignments.
 
 **A namespace owns the secrets named `<namespace>--<name>`** - `example--api-key`,
-`ingress-gateway--hello-example`. The namespaces with a share are every managed namespace and the ones
+`ingress-gateway--wildcard`. The namespaces with a share are every managed namespace and the ones
 in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (listener certificates).
 
 | Who | Role on the vault | Condition |

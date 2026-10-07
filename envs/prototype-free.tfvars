@@ -96,4 +96,6 @@ flux_git_repository = {
   url    = "https://github.com/olljanat-ai/aks-fluxcd-platform"
   branch = "main"
   path   = "./clusters/prototype"
+  # Read every minute rather than every five, so a merged change reaches the cluster within one.
+  sync_interval_seconds = 60
 }

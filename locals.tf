@@ -68,10 +68,15 @@ locals {
       }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
       kustomizations = {
         platform = {
-          path                   = try(var.flux_git_repository.path, null)
-          prune                  = true
-          syncIntervalInSeconds  = try(var.flux_git_repository.sync_interval_seconds, null)
-          retryIntervalInSeconds = 900
+          path                  = try(var.flux_git_repository.path, null)
+          prune                 = true
+          syncIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
+          # A failed run is retried as often as the repository is read, not after a quarter of an hour.
+          retryIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
+          # No health checks: `platform` applies the Kustomizations of clusters/<cluster>/ and is done,
+          # and each of those waits for its own objects. Waiting here as well kept every new commit
+          # queued behind whichever of them was unhealthy, for up to the full timeout.
+          wait = false
           postBuild = {
             substitute = local.flux_cluster_settings
           }

@@ -2527,7 +2527,7 @@ run "every_namespace_reads_its_own_share_of_the_vault" {
 
   assert {
     condition = alltrue([
-      keys(azurerm_user_assigned_identity.key_vault) == ["example", "ingress-gateway", "traefik"],
+      keys(azurerm_user_assigned_identity.key_vault) == ["example", "ingress-gateway"],
       azurerm_user_assigned_identity.key_vault["example"].name == "id-sec-test-aks-kv-example",
       azurerm_federated_identity_credential.key_vault["example"].subject == "system:serviceaccount:example:key-vault",
       azurerm_federated_identity_credential.key_vault["ingress-gateway"].subject == "system:serviceaccount:ingress-gateway:key-vault",
@@ -2732,7 +2732,7 @@ run "vault_and_zone_grants_can_be_left_to_someone_else" {
       length(azurerm_role_assignment.key_vault_namespace_writer) == 0,
       length(azurerm_role_assignment.key_vault_admin) == 0,
       length(azurerm_role_assignment.external_dns) == 0,
-      length(azurerm_user_assigned_identity.key_vault) == 3,
+      length(azurerm_user_assigned_identity.key_vault) == 2,
       length(azurerm_user_assigned_identity.external_dns) == 1,
     ])
     error_message = "With create_role_assignments = false the identities are still created, and the grants left to the estate."
@@ -2773,7 +2773,6 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_url == "https://kv-aks-test.vault.azure.net/",
       contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_example"),
       contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_ingress_gateway"),
-      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_traefik"),
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_name == "contoso.com",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_resource_group_name == "rg-aks-test",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_subscription_id == "55555555-5555-5555-5555-555555555555",

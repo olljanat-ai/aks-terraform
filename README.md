@@ -461,8 +461,8 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 ## Monitoring and ingress
 
 Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
-Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Traefik Hub API
-Gateway behind an Azure internal load balancer - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Traefik Proxy
+behind an Azure internal load balancer - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
 otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
@@ -515,7 +515,7 @@ configuration provides is the API itself; the controller serving it is deployed 
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
 | `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on the `2025-09-02-preview` API, the only one that knows the setting. |
 
-The Flux repository runs [Traefik Hub API Gateway][traefikhub], which provides the `traefik`
+The Flux repository runs [Traefik Proxy][traefik], which provides the `traefik`
 GatewayClass, behind a `LoadBalancer` Service annotated
 `service.beta.kubernetes.io/azure-load-balancer-internal: "true"`. AKS creates an
 [internal load balancer][ilb] for it, in the node resource group, with a private frontend IP:
@@ -572,8 +572,7 @@ assignments.
 
 **A namespace owns the secrets named `<namespace>--<name>`** - `example--api-key`,
 `ingress-gateway--hello-example`. The namespaces with a share are every managed namespace and the ones
-in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (listener certificates)
-and `traefik` (the Traefik Hub license).
+in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (listener certificates).
 
 | Who | Role on the vault | Condition |
 | --- | --- | --- |
@@ -612,7 +611,7 @@ az keyvault secret set --vault-name <key_vault_name> --name example--api-key --v
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
 [ilb]: https://learn.microsoft.com/azure/aks/internal-lb
 [managedgw]: https://learn.microsoft.com/azure/aks/managed-gateway-api
-[traefikhub]: https://doc.traefik.io/traefik-hub/api-gateway/intro
+[traefik]: https://doc.traefik.io/traefik/reference/install-configuration/providers/kubernetes/kubernetes-gateway/
 
 ## GitOps with Flux
 

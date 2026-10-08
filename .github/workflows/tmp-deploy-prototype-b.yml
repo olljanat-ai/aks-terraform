@@ -16,32 +16,8 @@ jobs:
       action: apply
     secrets: inherit
 
-  # The cancelled first run left prototype-b.tfstate locked (its blob lease).
-  unlock:
-    runs-on: ubuntu-latest
-    environment: prototype
-    env:
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: "1.14.4"
-          terraform_wrapper: false
-      - run: |
-          terraform init -input=false \
-            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="key=prototype-b.tfstate"
-          terraform force-unlock -force 66298965-706e-3097-9a41-b9443ecf5fd0 || true
-          terraform state list
-
   prototype-b:
-    needs: [shared, unlock]
+    needs: shared
     uses: ./.github/workflows/deploy-prototype.yml
     with:
       stack: prototype-b

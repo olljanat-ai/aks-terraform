@@ -138,11 +138,14 @@ locals {
   external_dns_internal_service_account = "system:serviceaccount:external-dns:external-dns-internal"
 
   # The public DNS zone, whether looked up or created here. Null when no zone is named.
-  dns_zone_resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
+  #
+  # A zone is shared between the clusters on a shared resource group, like the vault: each publishes
+  # its own hostnames in it, and the records of a workload's hostnames follow the workload.
+  dns_zone_resource_group_name = coalesce(var.dns_zone_resource_group_name, var.shared_resource_group_name, var.resource_group_name)
   dns_zone_id                  = one(concat(data.azurerm_dns_zone.this[*].id, azurerm_dns_zone.this[*].id))
 
   # The private zone, likewise. Null when no zone is named.
-  internal_dns_zone_resource_group_name = coalesce(var.internal_dns_zone_resource_group_name, var.resource_group_name)
+  internal_dns_zone_resource_group_name = coalesce(var.internal_dns_zone_resource_group_name, var.shared_resource_group_name, var.resource_group_name)
   internal_dns_zone_id                  = one(concat(data.azurerm_private_dns_zone.internal[*].id, azurerm_private_dns_zone.internal[*].id))
 
   # external-dns, and the identity it writes as, are there for either zone.

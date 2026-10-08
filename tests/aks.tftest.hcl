@@ -3295,6 +3295,74 @@ run "a_second_cluster_reads_the_shared_vault_and_grants_only_its_own" {
   }
 }
 
+run "the_zones_are_created_in_the_shared_group" {
+  command = plan
+
+  variables {
+    shared_resource_group_name = "rg-aks-shared"
+    dns_zone_name              = "contoso.com"
+    dns_zone_create            = true
+    internal_dns_zone_name     = "internal.contoso.com"
+    internal_dns_zone_create   = true
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_dns_zone.this[0].resource_group_name == "rg-aks-shared",
+      azurerm_private_dns_zone.internal[0].resource_group_name == "rg-aks-shared",
+      azurerm_private_dns_zone_virtual_network_link.internal[0].resource_group_name == "rg-aks-shared",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_resource_group_name == "rg-aks-shared",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_resource_group_name == "rg-aks-shared",
+      # The identity that writes them stays the cluster's.
+      azurerm_user_assigned_identity.external_dns[0].resource_group_name == "rg-aks-test",
+    ])
+    error_message = "With a shared resource group the zones should be created there, and external-dns told so."
+  }
+}
+
+run "a_second_cluster_finds_the_zones_in_the_shared_group" {
+  command = plan
+
+  variables {
+    shared_resource_group_name = "rg-aks-shared"
+    dns_zone_name              = "contoso.com"
+    internal_dns_zone_name     = "internal.contoso.com"
+  }
+
+  assert {
+    condition = alltrue([
+      data.azurerm_dns_zone.this[0].resource_group_name == "rg-aks-shared",
+      data.azurerm_private_dns_zone.internal[0].resource_group_name == "rg-aks-shared",
+      length(azurerm_dns_zone.this) == 0,
+      length(azurerm_private_dns_zone.internal) == 0,
+    ])
+    error_message = "A cluster that does not create the zones should look them up in the shared group."
+  }
+}
+
+run "an_explicit_zone_group_wins_over_the_shared_one" {
+  command = plan
+
+  variables {
+    shared_resource_group_name            = "rg-aks-shared"
+    dns_zone_name                         = "contoso.com"
+    dns_zone_resource_group_name          = "rg-dns"
+    internal_dns_zone_name                = "internal.contoso.com"
+    internal_dns_zone_resource_group_name = "rg-dns"
+  }
+
+  assert {
+    condition = alltrue([
+      data.azurerm_dns_zone.this[0].resource_group_name == "rg-dns",
+      data.azurerm_private_dns_zone.internal[0].resource_group_name == "rg-dns",
+    ])
+    error_message = "dns_zone_resource_group_name and internal_dns_zone_resource_group_name should still say where the zones are."
+  }
+}
+
 run "sharing_a_vault_needs_its_name" {
   command = plan
 

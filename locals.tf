@@ -71,7 +71,7 @@ locals {
     # The cluster's Key Vault, and for each namespace with a share of it the identity that reads
     # that share: `key_vault_client_id_<namespace>`, the namespace's hyphens as underscores, since a
     # Flux variable name has no hyphens.
-    local.key_vault_enabled ? { key_vault_url = azurerm_key_vault.this[0].vault_uri } : {},
+    local.key_vault_enabled ? { key_vault_url = local.key_vault_uri } : {},
     {
       for namespace in local.key_vault_namespaces :
       "key_vault_client_id_${replace(namespace, "-", "_")}" => azurerm_user_assigned_identity.key_vault[namespace].client_id
@@ -88,6 +88,9 @@ locals {
       internal_dns_zone_subscription_id     = split("/", local.internal_dns_zone_id)[2]
     },
     local.external_dns_enabled ? { dns_identity_client_id = azurerm_user_assigned_identity.external_dns[0].client_id } : {},
+    # Where the disks of persistent volumes go, so that they outlive the cluster - see
+    # shared_resource_group_name.
+    var.shared_resource_group_name == null ? {} : { shared_resource_group_name = var.shared_resource_group_name },
   )
 
   # The Flux configuration as sent to Azure, apart from the credential: a local rather than written
@@ -145,8 +148,17 @@ locals {
   # external-dns, and the identity it writes as, are there for either zone.
   external_dns_enabled = var.dns_zone_name != null || var.internal_dns_zone_name != null
 
-  # The Key Vault is created for a cluster that names one.
-  key_vault_enabled = var.key_vault_name != null
+  # The Key Vault is there for a cluster that names one: created here, or another cluster's looked up
+  # - see key_vault_create. It lives with whatever else outlives the cluster when there is a shared
+  # resource group, and in the cluster's own otherwise.
+  key_vault_enabled             = var.key_vault_name != null
+  key_vault_resource_group_name = coalesce(var.shared_resource_group_name, var.resource_group_name)
+  key_vault_id                  = one(concat(data.azurerm_key_vault.this[*].id, azurerm_key_vault.this[*].id))
+  key_vault_uri                 = one(concat(data.azurerm_key_vault.this[*].vault_uri, azurerm_key_vault.this[*].vault_uri))
+
+  # The vault-wide grants and the webhook token are made once, by the configuration that creates the
+  # vault: they name the same principals and the same secret from every cluster that shares it.
+  key_vault_owned = local.key_vault_enabled && var.key_vault_create
 
   # The namespaces with a share of the vault: every managed namespace, and the ones the platform
   # creates itself that key_vault_namespaces names. None without a vault.
@@ -220,7 +232,7 @@ locals {
 
   # The namespace grants that come with the namespace's secrets: whoever may write in the namespace
   # manages its share of the vault as well. Keyed like the grants they come from.
-  key_vault_writer_role_assignments = var.create_role_assignments && local.key_vault_enabled ? {
+  key_vault_writer_role_assignments = var.create_role_assignments && local.key_vault_owned ? {
     for key, grant in local.managed_namespace_access_grants : key => grant
     if contains(["admin", "writer"], grant.role)
   } : {}
@@ -239,6 +251,9 @@ locals {
   # access to resources that already exist - and a cluster that brings no network has none of those
   # to be granted. The identity is not created at all in that case; the cluster's own is used.
   system_assigned_identity = local.is_automatic && !local.byo_network
+
+  # The principal the cluster acts as towards Azure: the identity created here, or its own.
+  cluster_identity_principal_id = local.system_assigned_identity ? module.aks.identity_principal_id : one(azurerm_user_assigned_identity.this[*].principal_id)
 
   # Whether the API server is joined to the existing network. It takes both halves: the integration
   # turned on and a subnet to inject the API server into. Either one missing leaves the API server

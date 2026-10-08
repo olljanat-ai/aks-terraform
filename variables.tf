@@ -519,12 +519,35 @@ variable "internal_dns_zone_resource_group_name" {
   description = "Resource group of the private zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
 }
 
+variable "key_vault_create" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+Whether the Key Vault of `key_vault_name` is created here, or is one that already exists - another
+cluster's, in the same `shared_resource_group_name` - and is only looked up. Two clusters that share
+a vault share every secret in it, so a workload moved from one to the other finds its secrets where
+it left them.
+
+The configuration that creates the vault also makes the grants on it that are not one cluster's
+own: `Key Vault Administrator` for `entra_admin_group_object_ids`, `Key Vault Secrets Officer` for
+the namespaces' `writer` and `admin` grants, and the Flux webhook's token. A cluster that looks the
+vault up grants only its own namespace identities their read access - the people are granted once,
+and Azure refuses the same grant twice.
+DESCRIPTION
+  nullable    = false
+  validation {
+    condition     = var.key_vault_create || var.key_vault_name != null
+    error_message = "key_vault_create = false needs key_vault_name to name the existing vault."
+  }
+}
+
 variable "key_vault_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the Azure Key Vault created for the cluster, in `resource_group_name`. Key Vault names are
-global: 3 to 24 letters, digits and single hyphens, starting with a letter. Leave it unset and no
+Name of the cluster's Azure Key Vault, in `shared_resource_group_name` - or in `resource_group_name`
+when there is no shared one. It is created here unless `key_vault_create` is false. Key Vault names
+are global: 3 to 24 letters, digits and single hyphens, starting with a letter. Leave it unset and no
 vault is created and nothing is synced from one.
 
 The one vault holds the secrets of every namespace, kept apart by name: a namespace owns the secrets
@@ -1225,6 +1248,29 @@ DESCRIPTION
   validation {
     condition     = can(regex("^[0-9]+(ms|s|m|h)$", var.role_assignment_propagation_delay))
     error_message = "role_assignment_propagation_delay must be a duration such as \"60s\" or \"2m\"."
+  }
+}
+
+variable "shared_resource_group_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of an existing resource group for what outlives the cluster: the Key Vault and the disks of
+its persistent volumes. Everything else - the cluster, its identities, the node resource group AKS
+deletes with it - stays per cluster. Two clusters that name the same group can hand workloads to
+each other: the secrets are in the vault both read, and a disk is attached to whichever cluster
+mounts it next. See the README, "Shared resource group".
+
+The cluster identity is granted `Contributor` on the group, which the Azure Disk CSI driver needs to
+create, attach and delete disks outside the node resource group, and the cluster's Flux repository
+is told its name as `shared_resource_group_name`, for the StorageClass that puts disks there. Leave
+it unset and the vault goes to `resource_group_name` and disks stay in the node resource group, to
+be deleted with the cluster.
+DESCRIPTION
+
+  validation {
+    condition     = var.shared_resource_group_name == null || try(length(trimspace(var.shared_resource_group_name)) > 0, false)
+    error_message = "shared_resource_group_name must not be empty; leave it unset for none."
   }
 }
 

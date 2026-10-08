@@ -1,8 +1,9 @@
 name: Deploy prototype-free
 
 # Plans, and on request applies, this configuration to the prototype-free cluster with
-# envs/prototype-free.tfvars. Started by hand only: choose `plan` to see what would change, `apply`
-# to change it. An apply plans first and applies exactly that plan, so what the log shows is what
+# envs/prototype-free.tfvars - or to its sibling prototype-free-b with envs/prototype-free-b.tfvars,
+# chosen by the `environment` input. Started by hand only: choose `plan` to see what would change,
+# `apply` to change it. An apply plans first and applies exactly that plan, so what the log shows is what
 # was done.
 #
 # State is the azurerm backend in terraform.tf. The storage account is not in the repository, so it
@@ -10,7 +11,10 @@ name: Deploy prototype-free
 #
 #   TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT   where the `tfstate` container is.
 #   TF_STATE_KEY                                        the state blob; defaults to the key in
-#                                                       terraform.tf (aks.tfstate).
+#                                                       terraform.tf (aks.tfstate) for
+#                                                       prototype-free, and to
+#                                                       <environment>.tfstate for any other, so
+#                                                       that two clusters never share a state.
 #
 # A run that finds the state empty stops before planning unless `allow_empty_state` is set: an empty
 # state behind an existing cluster means the backend settings are wrong, and a plan against it would
@@ -29,6 +33,12 @@ name: Deploy prototype-free
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: "Cluster: envs/<environment>.tfvars, and the GitHub environment of that name"
+        required: true
+        default: "prototype-free"
+        type: choice
+        options: [prototype-free, prototype-free-b]
       action:
         description: "plan shows the changes; apply makes them"
         required: true
@@ -52,18 +62,18 @@ env:
 
 jobs:
   deploy:
-    name: ${{ inputs.action }} prototype-free
+    name: ${{ inputs.action }} ${{ inputs.environment }}
     runs-on: ubuntu-latest
     # The GitHub environment of the same name: its protection rules (required reviewers, branches)
     # hold the run, and its variables and secrets win over the repository's.
-    environment: prototype-free
+    environment: ${{ inputs.environment }}
     concurrency:
       # One run at a time against the state; never cancel one mid-apply. The backend's blob lease
       # protects the state as well, but a queued run is clearer than a failed lock.
-      group: terraform-prototype-free
+      group: terraform-${{ inputs.environment }}
       cancel-in-progress: false
     env:
-      TF_ENV: prototype-free
+      TF_ENV: ${{ inputs.environment }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -94,6 +104,12 @@ jobs:
             echo "See the header of .github/workflows/deploy-prototype-free.yml." >&2
             exit 1
           fi
+          # A TF_STATE_KEY set for the repository reaches every GitHub environment that does not set
+          # its own - and another cluster's state would plan to replace that cluster with this one.
+          if [ "$TF_ENV" != "prototype-free" ] && [ -n "$TF_STATE_KEY" ] && [[ "$TF_STATE_KEY" != *"$TF_ENV"* ]]; then
+            echo "::error::TF_STATE_KEY ($TF_STATE_KEY) does not name $TF_ENV. Set TF_STATE_KEY in the $TF_ENV GitHub environment, or leave it unset there and at the repository for ${TF_ENV}.tfstate." >&2
+            exit 1
+          fi
 
       # HCL object syntax, as the variable's description asks. GitHub masks the secret in the log.
       - name: Pass the Flux credentials
@@ -113,6 +129,8 @@ jobs:
           )
           if [ -n "$TF_STATE_KEY" ]; then
             args+=(-backend-config="key=$TF_STATE_KEY")
+          elif [ "$TF_ENV" != "prototype-free" ]; then
+            args+=(-backend-config="key=${TF_ENV}.tfstate")
           fi
           terraform init "${args[@]}"
 

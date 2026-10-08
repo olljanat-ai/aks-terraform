@@ -407,6 +407,32 @@ resource "azurerm_role_assignment" "external_dns_internal" {
   principal_type       = "ServicePrincipal"
 }
 
+# What outlives the cluster - its Key Vault and the disks of its persistent volumes - lives in a
+# resource group of its own, which exists already like the cluster's and is shared with whichever
+# cluster takes the workloads over. See the README, "Shared resource group".
+data "azurerm_resource_group" "shared" {
+  count = var.shared_resource_group_name == null ? 0 : 1
+
+  name = var.shared_resource_group_name
+}
+
+# The Azure Disk CSI driver acts as the cluster identity. Within the node resource group AKS grants
+# it what it needs; a disk the platform's StorageClass asks for in the shared group - and a disk
+# another cluster created there - is created, attached and deleted only with `Contributor` on the
+# group, which is what Microsoft documents for a disk outside the node resource group.
+#
+# That is management plane access to the vault in the group as well: it cannot read a secret - the
+# vault authorizes data through Azure RBAC, and Contributor holds no data action - but it could
+# delete the vault, which soft delete would keep recoverable for 90 days.
+resource "azurerm_role_assignment" "shared_disks" {
+  count = var.create_role_assignments && var.shared_resource_group_name != null ? 1 : 0
+
+  principal_id         = local.cluster_identity_principal_id
+  scope                = data.azurerm_resource_group.shared[0].id
+  role_definition_name = "Contributor"
+  principal_type       = "ServicePrincipal"
+}
+
 # A public API server with no allowlist is reachable from anywhere on the internet, and Azure will
 # not stop you from creating one. Terraform reports this as a warning rather than an error, because
 # it is a legitimate choice for a throwaway cluster and a bad one for anything else.

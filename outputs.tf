@@ -17,7 +17,7 @@ Principal ID of the identity the cluster runs as - the user assigned identity cr
 cluster's own system assigned one where Azure requires that instead. Grant it access to resources
 the cluster has to reach.
 DESCRIPTION
-  value       = local.system_assigned_identity ? module.aks.identity_principal_id : one(azurerm_user_assigned_identity.this[*].principal_id)
+  value       = local.cluster_identity_principal_id
 }
 
 output "identity_resource_id" {
@@ -30,7 +30,7 @@ DESCRIPTION
 
 output "key_vault_id" {
   description = "Resource ID of the cluster's Key Vault. Null when `key_vault_name` is unset."
-  value       = one(azurerm_key_vault.this[*].id)
+  value       = local.key_vault_id
 }
 
 output "key_vault_uri" {
@@ -38,7 +38,7 @@ output "key_vault_uri" {
 URI of the cluster's Key Vault, for `az keyvault secret set --id` and the like. Null when
 `key_vault_name` is unset. A namespace's secrets are the ones named `<namespace>--<name>`.
 DESCRIPTION
-  value       = one(azurerm_key_vault.this[*].vault_uri)
+  value       = local.key_vault_uri
 }
 
 output "kubelet_identity_object_id" {

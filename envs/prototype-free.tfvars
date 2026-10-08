@@ -13,15 +13,21 @@ sku_tier = "Free"
 # Existing resource group.
 resource_group_name = "rg-aks-prototype"
 
+# Existing resource group for what outlives the cluster: the Key Vault below and the disks of the
+# platform's `portable-disk` StorageClass. Shared with aks-prototype-free-b
+# (envs/prototype-free-b.tfvars), so that workloads can be moved between the two. See the README,
+# "Shared resource group".
+shared_resource_group_name = "rg-aks-prototype-shared"
+
 # Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
 virtual_network_name                = "vnet-aks-prototype"
 node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
-# The cluster's Key Vault, created in resource_group_name. It holds the secrets of every namespace -
-# the listener certificates of ingress-gateway, the example team's - each
-# namespace reading only the ones named `<namespace>--<name>`. Key Vault names are global; pick
-# another if this one is taken.
+# The cluster's Key Vault, created in shared_resource_group_name. It holds the secrets of every
+# namespace - the listener certificates of ingress-gateway, the example team's - each namespace
+# reading only the ones named `<namespace>--<name>`. aks-prototype-free-b reads the same vault. Key
+# Vault names are global; pick another if this one is taken.
 key_vault_name = "kv-proto-aks-free"
 
 # Where the Gateway's hostnames are published. The zone is created here, in resource_group_name; the

@@ -335,7 +335,7 @@ DESCRIPTION
 variable "dns_zone_resource_group_name" {
   type        = string
   default     = null
-  description = "Resource group of the DNS zone - the existing one, or the one it is created in. Defaults to `shared_resource_group_name`, or `resource_group_name` without one."
+  description = "Resource group of the DNS zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
 }
 
 variable "enable_telemetry" {
@@ -516,30 +516,30 @@ DESCRIPTION
 variable "internal_dns_zone_resource_group_name" {
   type        = string
   default     = null
-  description = "Resource group of the private zone - the existing one, or the one it is created in. Defaults to `shared_resource_group_name`, or `resource_group_name` without one."
+  description = "Resource group of the private zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
 }
 
 variable "key_vault_create" {
   type        = bool
   default     = true
   description = <<DESCRIPTION
-Whether the Key Vault of `key_vault_name` is created here, or is one that already exists - another
-cluster's, in the same `shared_resource_group_name` - and is only looked up. Two clusters that share
-a vault share every secret in it, so a workload moved from one to the other finds its secrets where
-it left them.
+Whether the Key Vault of `key_vault_name` is the cluster's own, created here, or the environment's
+shared one, created by `shared/` in `resource_group_name` and only looked up.
 
-The configuration that creates the vault also makes the grants on it that are not one cluster's
-own: `Key Vault Administrator` for `entra_admin_group_object_ids`, `Key Vault Secrets Officer` for
-the namespaces' `writer` and `admin` grants, and the Flux webhook's token - and, with a
-`shared_resource_group_name`, the namespaces' shared identities and their read access. A cluster
-that looks the vault up only federates those identities with its own service accounts: everything
-is granted once, and Azure refuses the same grant twice. Every namespace with a share in a cluster
-that looks the vault up has to have one in the configuration that creates it, too.
+The cluster's own vault comes with everything on it - the namespaces' identities
+(`<cluster identity>-kv-<namespace>`), their read access, the `writer` and `admin` grants, the admin
+groups' `Key Vault Administrator`, the Flux webhook's token - and goes with the cluster.
+
+With the shared one, all of that is `shared/`'s, and the namespaces read the vault as the
+environment's shared identities (`id-<region>-<environment>-shared-kv-<namespace>`). The cluster
+adds a federated credential of its own to each, for its namespace's `key-vault` service account, and
+nothing else: it can be destroyed, rebuilt or replaced while the secrets and the identities stay.
+Every namespace with a share here needs one in `shared/` too.
 DESCRIPTION
   nullable    = false
   validation {
     condition     = var.key_vault_create || var.key_vault_name != null
-    error_message = "key_vault_create = false needs key_vault_name to name the existing vault."
+    error_message = "key_vault_create = false needs key_vault_name to name the environment's shared vault."
   }
 }
 
@@ -547,14 +547,14 @@ variable "key_vault_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the cluster's Azure Key Vault, in `shared_resource_group_name` - or in `resource_group_name`
-when there is no shared one. It is created here unless `key_vault_create` is false. Key Vault names
+Name of the cluster's Azure Key Vault, in `resource_group_name`: its own, created here, or the
+environment's shared one when `key_vault_create` is false. Key Vault names
 are global: 3 to 24 letters, digits and single hyphens, starting with a letter. Leave it unset and no
 vault is created and nothing is synced from one.
 
 The one vault holds the secrets of every namespace, kept apart by name: a namespace owns the secrets
 named `<namespace>--<name>`. Each namespace in `key_vault_namespaces` and `managed_namespaces` gets
-an identity of its own - shared between the clusters with a `shared_resource_group_name` -
+an identity - the cluster's own, or the environment's shared one beside the shared vault -
 federated with its `key-vault` service account and granted
 `Key Vault Secrets User` with an Azure ABAC condition that lets it read its own secrets and no
 others. The namespace's `writer` and `admin` grants manage its secrets under the same condition, and
@@ -1202,6 +1202,19 @@ DESCRIPTION
   }
 }
 
+variable "portable_disks_enabled" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether the platform's `portable-disk` StorageClass creates its disks here, in `resource_group_name`,
+rather than in the node resource group AKS deletes with the cluster - so that a disk outlives the
+cluster and can be attached to the next one. The cluster identity is granted a role of its own on
+`resource_group_name` that covers disks and snapshots and nothing else, and the Flux repository is
+told the group as `portable_disk_resource_group_name`.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "private_cluster_enabled" {
   type        = bool
   default     = true
@@ -1251,31 +1264,6 @@ DESCRIPTION
   validation {
     condition     = can(regex("^[0-9]+(ms|s|m|h)$", var.role_assignment_propagation_delay))
     error_message = "role_assignment_propagation_delay must be a duration such as \"60s\" or \"2m\"."
-  }
-}
-
-variable "shared_resource_group_name" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Name of an existing resource group for what outlives the cluster: the Key Vault, the identities its
-namespaces read it as, the public and private DNS zones its hostnames are published in, and the
-disks of its persistent volumes. Everything else - the cluster, its
-own identity and external-dns's, the node resource group AKS deletes with it - stays per cluster.
-Two clusters that name the same group can hand workloads to each other: a namespace is the same
-identity in both, reading the same vault, and a disk is attached to whichever cluster mounts it
-next. See the README, "Shared resource group".
-
-The cluster identity is granted `Contributor` on the group, which the Azure Disk CSI driver needs to
-create, attach and delete disks outside the node resource group, and the cluster's Flux repository
-is told its name as `shared_resource_group_name`, for the StorageClass that puts disks there. Leave
-it unset and the vault goes to `resource_group_name` and disks stay in the node resource group, to
-be deleted with the cluster.
-DESCRIPTION
-
-  validation {
-    condition     = var.shared_resource_group_name == null || try(length(trimspace(var.shared_resource_group_name)) > 0, false)
-    error_message = "shared_resource_group_name must not be empty; leave it unset for none."
   }
 }
 

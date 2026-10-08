@@ -43,6 +43,19 @@ jobs:
       - name: Test
         run: terraform test
 
+      # The environment's shared resources, a root module of their own.
+      - name: Initialize shared/
+        working-directory: shared
+        run: terraform init -backend=false -input=false
+
+      - name: Validate shared/
+        working-directory: shared
+        run: terraform validate
+
+      - name: Test shared/
+        working-directory: shared
+        run: terraform test
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -68,3 +81,6 @@ jobs:
 
       - name: Lint
         run: tflint --format=compact
+
+      - name: Lint shared/
+        run: tflint --chdir=shared --config="$GITHUB_WORKSPACE/.tflint.hcl" --format=compact

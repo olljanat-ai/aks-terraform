@@ -41,13 +41,13 @@ mock_provider "azurerm" {
   }
   mock_data "azurerm_key_vault" {
     defaults = {
-      id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.KeyVault/vaults/kv-aks-shared"
-      vault_uri = "https://kv-aks-shared.vault.azure.net/"
+      id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-sec-test-shared"
+      vault_uri = "https://kv-sec-test-shared.vault.azure.net/"
     }
   }
   mock_data "azurerm_user_assigned_identity" {
     defaults = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-kv-aks-shared-example"
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sec-test-shared-kv-example"
       principal_id = "77777777-7777-7777-7777-777777777777"
       client_id    = "88888888-8888-8888-8888-888888888888"
     }
@@ -126,12 +126,12 @@ run "the_identity_name_is_built_from_the_cluster_name_and_the_region" {
   command = plan
 
   variables {
-    name = "aks-prototype-free"
+    name = "aks-prototype-a"
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.this[0].name == "id-sec-prototype-aks-free"
-    error_message = "aks-prototype-free in swedencentral should be run by id-sec-prototype-aks-free."
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-sec-prototype-aks-a"
+    error_message = "aks-prototype-a in swedencentral should be run by id-sec-prototype-aks-a."
   }
 }
 
@@ -3153,10 +3153,10 @@ run "warns_about_a_created_internal_zone_with_no_network_to_link" {
 }
 
 # ----------------------------------------------------------------------------------------------
-# Shared resource group: the Key Vault and the disks outlive the cluster
+# Shared resources: the environment's Key Vault and identities, and portable disks
 # ----------------------------------------------------------------------------------------------
 
-run "without_a_shared_group_nothing_is_granted_on_one" {
+run "without_portable_disks_nothing_is_granted_for_them" {
   command = plan
 
   variables {
@@ -3167,27 +3167,19 @@ run "without_a_shared_group_nothing_is_granted_on_one" {
 
   assert {
     condition = alltrue([
-      length(data.azurerm_resource_group.shared) == 0,
-      length(azurerm_role_assignment.shared_disks) == 0,
-      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "shared_resource_group_name"),
+      length(azurerm_role_definition.portable_disks) == 0,
+      length(azurerm_role_assignment.portable_disks) == 0,
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "portable_disk_resource_group_name"),
     ])
-    error_message = "Without shared_resource_group_name no group is looked up, granted or handed to Flux."
+    error_message = "Without portable_disks_enabled nothing is granted for disks or handed to Flux."
   }
 }
 
-run "the_vault_and_the_disks_go_to_the_shared_group" {
+run "portable_disks_get_a_role_for_disks_only" {
   command = plan
 
-  override_data {
-    target = data.azurerm_resource_group.shared[0]
-    values = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared"
-    }
-  }
-
   variables {
-    key_vault_name             = "kv-aks-test"
-    shared_resource_group_name = "rg-aks-shared"
+    portable_disks_enabled = true
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
@@ -3195,51 +3187,44 @@ run "the_vault_and_the_disks_go_to_the_shared_group" {
 
   assert {
     condition = alltrue([
-      azurerm_key_vault.this[0].resource_group_name == "rg-aks-shared",
-      length(data.azurerm_key_vault.this) == 0,
-      # The namespaces' identities are shared with the vault, and named after it.
-      azurerm_user_assigned_identity.key_vault["ingress-gateway"].resource_group_name == "rg-aks-shared",
-      azurerm_user_assigned_identity.key_vault["ingress-gateway"].name == "id-kv-aks-test-ingress-gateway",
-      length(data.azurerm_user_assigned_identity.key_vault) == 0,
-      keys(azurerm_role_assignment.key_vault_namespace_reader) == ["ingress-gateway"],
-      azurerm_federated_identity_credential.key_vault["ingress-gateway"].name == "aks-aks-test",
+      azurerm_role_definition.portable_disks[0].name == "Portable disks (aks-test)",
+      azurerm_role_definition.portable_disks[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test",
+      azurerm_role_definition.portable_disks[0].permissions[0].actions == tolist([
+        "Microsoft.Compute/disks/*",
+        "Microsoft.Compute/snapshots/*",
+        "Microsoft.Resources/subscriptions/resourceGroups/read",
+      ]),
+      azurerm_role_assignment.portable_disks[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test",
     ])
-    error_message = "The vault and the namespaces' identities should be created in the shared resource group, the identities named after the vault."
+    error_message = "The cluster identity should get a role of its own on the resource group that covers disks and snapshots only."
   }
   assert {
-    condition = alltrue([
-      azurerm_role_assignment.shared_disks[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared",
-      azurerm_role_assignment.shared_disks[0].role_definition_name == "Contributor",
-    ])
-    error_message = "The cluster identity should hold Contributor on the shared group, for the disks the CSI driver puts there."
-  }
-  assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.shared_resource_group_name == "rg-aks-shared"
-    error_message = "The Flux repository should be told the shared group, for the StorageClass."
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.portable_disk_resource_group_name == "rg-aks-test"
+    error_message = "The Flux repository should be told where the portable disks go."
   }
 }
 
-run "the_shared_group_is_left_ungranted_when_grants_are_made_elsewhere" {
+run "portable_disks_are_left_ungranted_when_grants_are_made_elsewhere" {
   command = plan
 
   variables {
-    shared_resource_group_name = "rg-aks-shared"
-    create_role_assignments    = false
+    portable_disks_enabled  = true
+    create_role_assignments = false
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.shared_disks) == 0
+    condition     = length(azurerm_role_assignment.portable_disks) == 0
     error_message = "With create_role_assignments = false the disk grant is left to the estate too."
   }
 }
 
-run "a_second_cluster_reads_the_shared_vault_and_grants_only_its_own" {
+run "a_cluster_on_the_shared_vault_only_federates_the_shared_identities" {
   command = plan
 
   variables {
-    key_vault_name               = "kv-aks-shared"
+    name                         = "aks-test-a"
+    key_vault_name               = "kv-sec-test-shared"
     key_vault_create             = false
-    shared_resource_group_name   = "rg-aks-shared"
     entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
     managed_namespaces = {
       example = {
@@ -3255,111 +3240,46 @@ run "a_second_cluster_reads_the_shared_vault_and_grants_only_its_own" {
   assert {
     condition = alltrue([
       length(azurerm_key_vault.this) == 0,
-      data.azurerm_key_vault.this[0].name == "kv-aks-shared",
-      data.azurerm_key_vault.this[0].resource_group_name == "rg-aks-shared",
+      data.azurerm_key_vault.this[0].name == "kv-sec-test-shared",
+      data.azurerm_key_vault.this[0].resource_group_name == "rg-aks-test",
     ])
-    error_message = "A cluster sharing the vault should look it up in the shared group, not create it."
+    error_message = "A cluster on the shared vault should look it up, not create it."
   }
   assert {
     condition = alltrue([
       length(azurerm_user_assigned_identity.key_vault) == 0,
       keys(data.azurerm_user_assigned_identity.key_vault) == ["example", "flux-system", "ingress-gateway"],
-      data.azurerm_user_assigned_identity.key_vault["example"].name == "id-kv-aks-shared-example",
-      data.azurerm_user_assigned_identity.key_vault["example"].resource_group_name == "rg-aks-shared",
-      length(azurerm_role_assignment.key_vault_namespace_reader) == 0,
+      data.azurerm_user_assigned_identity.key_vault["example"].name == "id-sec-test-shared-kv-example",
+      data.azurerm_user_assigned_identity.key_vault["ingress-gateway"].name == "id-sec-test-shared-kv-ingress-gateway",
+      data.azurerm_user_assigned_identity.key_vault["example"].resource_group_name == "rg-aks-test",
     ])
-    error_message = "A cluster sharing the vault should look the namespaces' shared identities up, and leave their grants to the vault's owner."
+    error_message = "The namespaces' identities should be the environment's shared ones, looked up by their conventional names."
   }
   assert {
     condition = alltrue([
       keys(azurerm_federated_identity_credential.key_vault) == ["example", "flux-system", "ingress-gateway"],
-      azurerm_federated_identity_credential.key_vault["example"].name == "aks-aks-test",
-      azurerm_federated_identity_credential.key_vault["example"].user_assigned_identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-kv-aks-shared-example",
+      azurerm_federated_identity_credential.key_vault["example"].name == "aks-aks-test-a",
+      azurerm_federated_identity_credential.key_vault["example"].user_assigned_identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sec-test-shared-kv-example",
       azurerm_federated_identity_credential.key_vault["example"].subject == "system:serviceaccount:example:key-vault",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_client_id_example == "88888888-8888-8888-8888-888888888888",
     ])
-    error_message = "The cluster should federate each shared identity with its own service account, and hand Flux the shared client IDs."
+    error_message = "The cluster should add a credential of its own to each shared identity."
   }
   assert {
     condition = alltrue([
+      length(azurerm_role_assignment.key_vault_namespace_reader) == 0,
       length(azurerm_role_assignment.key_vault_admin) == 0,
       length(azurerm_role_assignment.key_vault_namespace_writer) == 0,
       length(azurerm_key_vault_secret.flux_github_webhook) == 0,
       length(random_password.flux_github_webhook) == 0,
     ])
-    error_message = "The vault-wide grants and the webhook token belong to the configuration that creates the vault."
+    error_message = "Every grant on the shared vault, and the webhook token, are shared/'s."
   }
-  assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_url == "https://kv-aks-shared.vault.azure.net/"
-    error_message = "The Flux repository should be told the shared vault's URL."
-  }
-}
-
-run "the_zones_are_created_in_the_shared_group" {
-  command = plan
-
-  variables {
-    shared_resource_group_name = "rg-aks-shared"
-    dns_zone_name              = "contoso.com"
-    dns_zone_create            = true
-    internal_dns_zone_name     = "internal.contoso.com"
-    internal_dns_zone_create   = true
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-  }
-
   assert {
     condition = alltrue([
-      azurerm_dns_zone.this[0].resource_group_name == "rg-aks-shared",
-      azurerm_private_dns_zone.internal[0].resource_group_name == "rg-aks-shared",
-      azurerm_private_dns_zone_virtual_network_link.internal[0].resource_group_name == "rg-aks-shared",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_resource_group_name == "rg-aks-shared",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_resource_group_name == "rg-aks-shared",
-      # The identity that writes them stays the cluster's.
-      azurerm_user_assigned_identity.external_dns[0].resource_group_name == "rg-aks-test",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_url == "https://kv-sec-test-shared.vault.azure.net/",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_client_id_example == "88888888-8888-8888-8888-888888888888",
     ])
-    error_message = "With a shared resource group the zones should be created there, and external-dns told so."
-  }
-}
-
-run "a_second_cluster_finds_the_zones_in_the_shared_group" {
-  command = plan
-
-  variables {
-    shared_resource_group_name = "rg-aks-shared"
-    dns_zone_name              = "contoso.com"
-    internal_dns_zone_name     = "internal.contoso.com"
-  }
-
-  assert {
-    condition = alltrue([
-      data.azurerm_dns_zone.this[0].resource_group_name == "rg-aks-shared",
-      data.azurerm_private_dns_zone.internal[0].resource_group_name == "rg-aks-shared",
-      length(azurerm_dns_zone.this) == 0,
-      length(azurerm_private_dns_zone.internal) == 0,
-    ])
-    error_message = "A cluster that does not create the zones should look them up in the shared group."
-  }
-}
-
-run "an_explicit_zone_group_wins_over_the_shared_one" {
-  command = plan
-
-  variables {
-    shared_resource_group_name            = "rg-aks-shared"
-    dns_zone_name                         = "contoso.com"
-    dns_zone_resource_group_name          = "rg-dns"
-    internal_dns_zone_name                = "internal.contoso.com"
-    internal_dns_zone_resource_group_name = "rg-dns"
-  }
-
-  assert {
-    condition = alltrue([
-      data.azurerm_dns_zone.this[0].resource_group_name == "rg-dns",
-      data.azurerm_private_dns_zone.internal[0].resource_group_name == "rg-dns",
-    ])
-    error_message = "dns_zone_resource_group_name and internal_dns_zone_resource_group_name should still say where the zones are."
+    error_message = "The Flux repository should be told the shared vault and the shared identities' client IDs."
   }
 }
 

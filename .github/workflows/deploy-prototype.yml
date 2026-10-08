@@ -1,44 +1,44 @@
-name: Deploy prototype-free
+name: Deploy prototype
 
-# Plans, and on request applies, this configuration to the prototype-free cluster with
-# envs/prototype-free.tfvars - or to its sibling prototype-free-b with envs/prototype-free-b.tfvars,
-# chosen by the `environment` input. Started by hand only: choose `plan` to see what would change,
-# `apply` to change it. An apply plans first and applies exactly that plan, so what the log shows is what
-# was done.
+# Plans, and on request applies, one of the prototype environment's three Terraform stacks, chosen by
+# the `stack` input. Started by hand only: choose `plan` to see what would change, `apply` to change
+# it. An apply plans first and applies exactly that plan, so what the log shows is what was done.
 #
-# State is the azurerm backend in terraform.tf. The storage account is not in the repository, so it
-# is given here through variables:
+#   prototype-shared   shared/ with shared/envs/prototype.tfvars: the Key Vault, the namespaces'
+#                      shared identities and the DNS zones both clusters use. Applied first.
+#   prototype-a        the repository root with envs/prototype-a.tfvars: cluster aks-prototype-a.
+#   prototype-b        the repository root with envs/prototype-b.tfvars: cluster aks-prototype-b.
+#
+# Each stack has a state of its own - so a cluster can be destroyed and built again without touching
+# the shared resources or the other cluster - in the azurerm backend of its terraform.tf, as
+# `<stack>.tfstate`. The storage account is not in the repository, so it is given here through
+# variables:
 #
 #   TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT   where the `tfstate` container is.
-#   TF_STATE_KEY                                        the state blob; defaults to the key in
-#                                                       terraform.tf (aks.tfstate) for
-#                                                       prototype-free, and to
-#                                                       <environment>.tfstate for any other, so
-#                                                       that two clusters never share a state.
 #
 # A run that finds the state empty stops before planning unless `allow_empty_state` is set: an empty
 # state behind an existing cluster means the backend settings are wrong, and a plan against it would
 # try to create everything again.
 #
 # Credentials: the same service principal as the Renew Certificate workflow - the repository (or
-# GitHub environment) variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID and the
+# `prototype` GitHub environment) variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID and the
 # secret AZURE_CLIENT_SECRET. Terraform's providers and the backend read them as ARM_*; the backend
 # reads the state with Entra ID rather than a storage account key. The principal needs, granted
 # outside this repository, what the configuration manages - Contributor and User Access
-# Administrator (or Owner) on the resource groups it touches - and Storage Blob Data Contributor on
-# the state container.
+# Administrator (or Owner) on the resource groups it touches, the latter also for the clusters'
+# `Portable disks` role definitions - and Storage Blob Data Contributor on the state container.
 #
 # The optional secret FLUX_GIT_HTTPS_KEY is passed as flux_git_credentials.https_key, for a private
-# flux_git_repository; without it Flux reads the repository anonymously.
+# flux_git_repository of a cluster; without it Flux reads the repository anonymously.
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: "Cluster: envs/<environment>.tfvars, and the GitHub environment of that name"
+      stack:
+        description: "prototype-shared (apply first), or a cluster: prototype-a, prototype-b"
         required: true
-        default: "prototype-free"
+        default: "prototype-a"
         type: choice
-        options: [prototype-free, prototype-free-b]
+        options: [prototype-shared, prototype-a, prototype-b]
       action:
         description: "plan shows the changes; apply makes them"
         required: true
@@ -62,25 +62,29 @@ env:
 
 jobs:
   deploy:
-    name: ${{ inputs.action }} ${{ inputs.environment }}
+    name: ${{ inputs.action }} ${{ inputs.stack }}
     runs-on: ubuntu-latest
-    # The GitHub environment of the same name: its protection rules (required reviewers, branches)
-    # hold the run, and its variables and secrets win over the repository's.
-    environment: ${{ inputs.environment }}
+    # The `prototype` GitHub environment, for all three stacks: its protection rules (required
+    # reviewers, branches) hold the run, and its variables and secrets win over the repository's.
+    environment: prototype
     concurrency:
-      # One run at a time against the state; never cancel one mid-apply. The backend's blob lease
+      # One run at a time against a state; never cancel one mid-apply. The backend's blob lease
       # protects the state as well, but a queued run is clearer than a failed lock.
-      group: terraform-${{ inputs.environment }}
+      group: terraform-${{ inputs.stack }}
       cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ inputs.stack == 'prototype-shared' && 'shared' || '.' }}
     env:
-      TF_ENV: ${{ inputs.environment }}
+      TF_STACK: ${{ inputs.stack }}
+      # The variables file, relative to the stack's directory.
+      VAR_FILE: ${{ inputs.stack == 'prototype-shared' && 'envs/prototype.tfvars' || format('envs/{0}.tfvars', inputs.stack) }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
       TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
-      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
       FLUX_GIT_HTTPS_KEY: ${{ secrets.FLUX_GIT_HTTPS_KEY }}
     steps:
       - uses: actions/checkout@v7
@@ -101,19 +105,13 @@ jobs:
           [ -n "$TF_STATE_STORAGE_ACCOUNT" ] || missing="$missing TF_STATE_STORAGE_ACCOUNT"
           if [ -n "$missing" ]; then
             echo "::error::Missing repository variables/secrets:$missing" >&2
-            echo "See the header of .github/workflows/deploy-prototype-free.yml." >&2
-            exit 1
-          fi
-          # A TF_STATE_KEY set for the repository reaches every GitHub environment that does not set
-          # its own - and another cluster's state would plan to replace that cluster with this one.
-          if [ "$TF_ENV" != "prototype-free" ] && [ -n "$TF_STATE_KEY" ] && [[ "$TF_STATE_KEY" != *"$TF_ENV"* ]]; then
-            echo "::error::TF_STATE_KEY ($TF_STATE_KEY) does not name $TF_ENV. Set TF_STATE_KEY in the $TF_ENV GitHub environment, or leave it unset there and at the repository for ${TF_ENV}.tfstate." >&2
+            echo "See the header of .github/workflows/deploy-prototype.yml." >&2
             exit 1
           fi
 
       # HCL object syntax, as the variable's description asks. GitHub masks the secret in the log.
       - name: Pass the Flux credentials
-        if: env.FLUX_GIT_HTTPS_KEY != ''
+        if: env.FLUX_GIT_HTTPS_KEY != '' && inputs.stack != 'prototype-shared'
         run: |
           echo "TF_VAR_flux_git_credentials={ https_key = \"$FLUX_GIT_HTTPS_KEY\" }" >> "$GITHUB_ENV"
 
@@ -126,12 +124,8 @@ jobs:
             -backend-config="resource_group_name=$TF_STATE_RESOURCE_GROUP"
             -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT"
             -backend-config="use_azuread_auth=true"
+            -backend-config="key=${TF_STACK}.tfstate"
           )
-          if [ -n "$TF_STATE_KEY" ]; then
-            args+=(-backend-config="key=$TF_STATE_KEY")
-          elif [ "$TF_ENV" != "prototype-free" ]; then
-            args+=(-backend-config="key=${TF_ENV}.tfstate")
-          fi
           terraform init "${args[@]}"
 
       - name: Check the state
@@ -142,7 +136,7 @@ jobs:
           count="$(terraform state list | wc -l)"
           echo "The state holds $count resources."
           if [ "$count" -eq 0 ] && [ "$ALLOW_EMPTY_STATE" != "true" ]; then
-            echo "::error::The state is empty. Check TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT and TF_STATE_KEY, or set allow_empty_state for a first deployment." >&2
+            echo "::error::The state ${TF_STACK}.tfstate is empty. Check TF_STATE_RESOURCE_GROUP and TF_STATE_STORAGE_ACCOUNT, or set allow_empty_state for a first deployment." >&2
             exit 1
           fi
 
@@ -151,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          terraform plan -var-file="envs/${TF_ENV}.tfvars" -out=tfplan -detailed-exitcode -no-color | tee plan.txt
+          terraform plan -var-file="$VAR_FILE" -out=tfplan -detailed-exitcode -no-color | tee plan.txt
           code=${PIPESTATUS[0]}
           set -e
           # 0: no changes, 2: changes, anything else: an error.
@@ -172,7 +166,7 @@ jobs:
           CHANGES: ${{ steps.plan.outputs.changes }}
         run: |
           {
-            echo "### Terraform ${ACTION} - ${TF_ENV}"
+            echo "### Terraform ${ACTION} - ${TF_STACK}"
             echo
             if [ -f plan.txt ]; then
               grep -E '^(Plan:|No changes\.|Changes to Outputs:)' plan.txt || true

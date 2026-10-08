@@ -1,47 +1,46 @@
-# Prototype cluster on the Free tier: one system node pool, Azure CNI overlay with Cilium,
-# no uptime SLA. Private by default.
+# Prototype cluster B: the same as aks-prototype-a (envs/prototype-a.tfvars), beside it in the same
+# resource group and network, on the same shared resources - so that workloads can be moved between
+# the two. shared/envs/prototype.tfvars is applied first.
 #
-#   terraform workspace select -or-create prototype-free
-#   terraform apply -var-file=envs/prototype-free.tfvars
+#   terraform workspace select -or-create prototype-b
+#   terraform apply -var-file=envs/prototype-b.tfvars
 
-name     = "aks-prototype-free"
+name     = "aks-prototype-b"
 location = "swedencentral"
 
 sku_name = "Base"
 sku_tier = "Free"
 
-# Existing resource group.
+# Existing resource group. It holds both clusters of the environment and what they share - see
+# shared/envs/prototype.tfvars. What is this cluster's own carries its name (`aks-prototype-b`,
+# `id-sec-prototype-aks-b...`); what is shared carries `shared` (`kv-sec-prototype-shared`,
+# `id-sec-prototype-shared-kv-...`).
 resource_group_name = "rg-aks-prototype"
 
-# Existing resource group for what outlives the cluster: the Key Vault below and the disks of the
-# platform's `portable-disk` StorageClass. Shared with aks-prototype-free-b
-# (envs/prototype-free-b.tfvars), so that workloads can be moved between the two. See the README,
-# "Shared resource group".
-shared_resource_group_name = "rg-aks-prototype-shared"
-
-# Existing network. Set virtual_network_resource_group_name when the network lives elsewhere.
+# Existing network - aks-prototype-a's, and the same node subnet. With Azure CNI overlay only the
+# nodes take addresses from the subnet; the pod range is each cluster's own and can be the same.
 virtual_network_name                = "vnet-aks-prototype"
 node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
-# The cluster's Key Vault, created in shared_resource_group_name. It holds the secrets of every
-# namespace - the listener certificates of ingress-gateway, the example team's - each namespace
-# reading only the ones named `<namespace>--<name>`. aks-prototype-free-b reads the same vault. Key
-# Vault names are global; pick another if this one is taken.
-key_vault_name = "kv-proto-aks-free"
+# SHARED. The environment's Key Vault, created by shared/ and looked up here. It holds the secrets
+# of every namespace - the listener certificates of ingress-gateway, the example team's - each
+# namespace reading only the ones named `<namespace>--<name>`, as the environment's shared identity
+# `id-sec-prototype-shared-kv-<namespace>`. This cluster adds a federated credential of its own to
+# each; every grant on the vault is shared/'s.
+key_vault_name   = "kv-sec-prototype-shared"
+key_vault_create = false
 
-# Where the Gateway's hostnames are published. The zone is created here, in
-# shared_resource_group_name, and aks-prototype-free-b publishes in it too. The cluster gets an
-# identity federated with external-dns's service account, and the Flux repository is told where the
-# zone is. Point the domain's NS records at the dns_zone_name_servers output.
-dns_zone_name   = "onek8s.lol"
-dns_zone_create = true
+# SHARED. The zones the Gateway's hostnames are published in, created by shared/ and looked up here.
+# This cluster's external-dns gets an identity of its own, granted on both zones, and owns its own
+# records in them; the Flux repository is told where they are.
+dns_zone_name          = "onek8s.lol"
+internal_dns_zone_name = "internal.onek8s.lol"
 
-# The same hostnames, privately: an Azure Private DNS zone created here, in
-# shared_resource_group_name, and linked to the network above. external-dns publishes the listener
-# hostnames that are in it, and they resolve only inside the network.
-internal_dns_zone_name   = "internal.onek8s.lol"
-internal_dns_zone_create = true
+# The disks of the platform's `portable-disk` StorageClass go to resource_group_name rather than the
+# node resource group, so they outlive this cluster and can be attached to aks-prototype-a. The
+# cluster identity is granted a role of its own for disks there, and nothing else.
+portable_disks_enabled = true
 
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
@@ -115,12 +114,13 @@ managed_namespaces = {
 flux_git_repository = {
   url    = "https://github.com/olljanat-ai/aks-fluxcd-platform"
   branch = "main"
-  path   = "./clusters/prototype"
+  path   = "./clusters/prototype-b"
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
   sync_interval_seconds = 60
 }
 
 # A GitHub push reaches the cluster at once: the platform repository publishes Flux's webhook
-# receiver (flux-webhook.onek8s.lol), and its token is created in the Key Vault here. Set the
-# repository's webhook to it once - see the README, "Flux".
+# receiver (flux-webhook-b.onek8s.lol), checked against the token shared/ keeps in the shared vault.
+# flux-system gets this cluster's credential on its shared identity to read it. Set a repository
+# webhook to it once - see the README, "Flux".
 flux_github_webhook = true

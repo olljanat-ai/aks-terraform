@@ -4,7 +4,7 @@ updates:
   # The AVM module and the provider versions in .terraform.lock.hcl. Pinned versions are only worth
   # pinning if something tells you when they go stale.
   - package-ecosystem: terraform
-    directory: /
+    directories: [/, /shared]
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

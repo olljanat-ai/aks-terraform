@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tmp-verify-prototype-b
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -75,14 +79,13 @@ jobs:
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io,gitrepositories.source.toolkit.fluxcd.io -A
           kubectl get pods -A -o wide
           kubectl get all,httproute,pvc -n example
-          ! kubectl get deployment -n example boot-log
-          ! kubectl get pvc -n example boot-log
+          if kubectl get deployment,pvc -n example boot-log; then echo "::error::boot-log is deployed."; exit 1; fi
           for i in $(seq 1 30); do
             if curl -fsS --max-time 10 https://hello-b.onek8s.lol/healthz; then echo; break; fi
             sleep 30
           done
           curl -fsS --max-time 10 https://hello-b.onek8s.lol/ | head -c 500; echo
-          ! curl -fsS --max-time 10 https://hello-b.onek8s.lol/boot-log/log.txt
+          if curl -fsS --max-time 10 https://hello-b.onek8s.lol/boot-log/log.txt; then echo "::error::boot-log answers."; exit 1; fi
 
       - name: An hour later, still no StorageClass
         run: |

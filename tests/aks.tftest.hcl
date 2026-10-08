@@ -39,6 +39,12 @@ mock_provider "azurerm" {
       vault_uri = "https://kv-aks-test.vault.azure.net/"
     }
   }
+  mock_data "azurerm_key_vault" {
+    defaults = {
+      id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.KeyVault/vaults/kv-aks-shared"
+      vault_uri = "https://kv-aks-shared.vault.azure.net/"
+    }
+  }
   mock_data "azurerm_dns_zone" {
     defaults = {
       id = "/subscriptions/55555555-5555-5555-5555-555555555555/resourceGroups/rg-dns/providers/Microsoft.Network/dnsZones/contoso.com"
@@ -2852,7 +2858,7 @@ run "rejects_a_namespace_whose_share_would_overlap_another" {
     }
   }
 
-  expect_failures = [azurerm_key_vault.this]
+  expect_failures = [azurerm_user_assigned_identity.key_vault]
 }
 
 run "rejects_a_vault_name_azure_would_refuse" {
@@ -3137,4 +3143,141 @@ run "warns_about_a_created_internal_zone_with_no_network_to_link" {
     condition     = length(azurerm_private_dns_zone_virtual_network_link.internal) == 0
     error_message = "A cluster on the network AKS manages has no network to link the zone to."
   }
+}
+
+# ----------------------------------------------------------------------------------------------
+# Shared resource group: the Key Vault and the disks outlive the cluster
+# ----------------------------------------------------------------------------------------------
+
+run "without_a_shared_group_nothing_is_granted_on_one" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      length(data.azurerm_resource_group.shared) == 0,
+      length(azurerm_role_assignment.shared_disks) == 0,
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "shared_resource_group_name"),
+    ])
+    error_message = "Without shared_resource_group_name no group is looked up, granted or handed to Flux."
+  }
+}
+
+run "the_vault_and_the_disks_go_to_the_shared_group" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_resource_group.shared[0]
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared"
+    }
+  }
+
+  variables {
+    key_vault_name             = "kv-aks-test"
+    shared_resource_group_name = "rg-aks-shared"
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_key_vault.this[0].resource_group_name == "rg-aks-shared",
+      length(data.azurerm_key_vault.this) == 0,
+      # The namespaces' identities are the cluster's own and stay with it.
+      azurerm_user_assigned_identity.key_vault["ingress-gateway"].resource_group_name == "rg-aks-test",
+    ])
+    error_message = "The vault should be created in the shared resource group, and the identities reading it in the cluster's."
+  }
+  assert {
+    condition = alltrue([
+      azurerm_role_assignment.shared_disks[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared",
+      azurerm_role_assignment.shared_disks[0].role_definition_name == "Contributor",
+    ])
+    error_message = "The cluster identity should hold Contributor on the shared group, for the disks the CSI driver puts there."
+  }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.shared_resource_group_name == "rg-aks-shared"
+    error_message = "The Flux repository should be told the shared group, for the StorageClass."
+  }
+}
+
+run "the_shared_group_is_left_ungranted_when_grants_are_made_elsewhere" {
+  command = plan
+
+  variables {
+    shared_resource_group_name = "rg-aks-shared"
+    create_role_assignments    = false
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.shared_disks) == 0
+    error_message = "With create_role_assignments = false the disk grant is left to the estate too."
+  }
+}
+
+run "a_second_cluster_reads_the_shared_vault_and_grants_only_its_own" {
+  command = plan
+
+  variables {
+    key_vault_name               = "kv-aks-shared"
+    key_vault_create             = false
+    shared_resource_group_name   = "rg-aks-shared"
+    entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
+    managed_namespaces = {
+      example = {
+        access = [{ role = "writer", principal_id = "33333333-3333-3333-3333-333333333333" }]
+      }
+    }
+    flux_github_webhook = true
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      length(azurerm_key_vault.this) == 0,
+      data.azurerm_key_vault.this[0].name == "kv-aks-shared",
+      data.azurerm_key_vault.this[0].resource_group_name == "rg-aks-shared",
+    ])
+    error_message = "A cluster sharing the vault should look it up in the shared group, not create it."
+  }
+  assert {
+    condition = alltrue([
+      keys(azurerm_user_assigned_identity.key_vault) == ["example", "flux-system", "ingress-gateway"],
+      alltrue([for assignment in azurerm_role_assignment.key_vault_namespace_reader : assignment.scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.KeyVault/vaults/kv-aks-shared"]),
+      length(azurerm_role_assignment.key_vault_namespace_reader) == 3,
+    ])
+    error_message = "Every namespace of the second cluster should still read its own share, of the shared vault."
+  }
+  assert {
+    condition = alltrue([
+      length(azurerm_role_assignment.key_vault_admin) == 0,
+      length(azurerm_role_assignment.key_vault_namespace_writer) == 0,
+      length(azurerm_key_vault_secret.flux_github_webhook) == 0,
+      length(random_password.flux_github_webhook) == 0,
+    ])
+    error_message = "The vault-wide grants and the webhook token belong to the configuration that creates the vault."
+  }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_url == "https://kv-aks-shared.vault.azure.net/"
+    error_message = "The Flux repository should be told the shared vault's URL."
+  }
+}
+
+run "sharing_a_vault_needs_its_name" {
+  command = plan
+
+  variables {
+    key_vault_create = false
+  }
+
+  expect_failures = [var.key_vault_create]
 }

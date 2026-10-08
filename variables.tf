@@ -530,9 +530,11 @@ it left them.
 
 The configuration that creates the vault also makes the grants on it that are not one cluster's
 own: `Key Vault Administrator` for `entra_admin_group_object_ids`, `Key Vault Secrets Officer` for
-the namespaces' `writer` and `admin` grants, and the Flux webhook's token. A cluster that looks the
-vault up grants only its own namespace identities their read access - the people are granted once,
-and Azure refuses the same grant twice.
+the namespaces' `writer` and `admin` grants, and the Flux webhook's token - and, with a
+`shared_resource_group_name`, the namespaces' shared identities and their read access. A cluster
+that looks the vault up only federates those identities with its own service accounts: everything
+is granted once, and Azure refuses the same grant twice. Every namespace with a share in a cluster
+that looks the vault up has to have one in the configuration that creates it, too.
 DESCRIPTION
   nullable    = false
   validation {
@@ -552,7 +554,8 @@ vault is created and nothing is synced from one.
 
 The one vault holds the secrets of every namespace, kept apart by name: a namespace owns the secrets
 named `<namespace>--<name>`. Each namespace in `key_vault_namespaces` and `managed_namespaces` gets
-an identity of its own, federated with its `key-vault` service account and granted
+an identity of its own - shared between the clusters with a `shared_resource_group_name` -
+federated with its `key-vault` service account and granted
 `Key Vault Secrets User` with an Azure ABAC condition that lets it read its own secrets and no
 others. The namespace's `writer` and `admin` grants manage its secrets under the same condition, and
 `entra_admin_group_object_ids` run the whole vault as `Key Vault Administrator`.
@@ -1255,11 +1258,12 @@ variable "shared_resource_group_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of an existing resource group for what outlives the cluster: the Key Vault and the disks of
-its persistent volumes. Everything else - the cluster, its identities, the node resource group AKS
-deletes with it - stays per cluster. Two clusters that name the same group can hand workloads to
-each other: the secrets are in the vault both read, and a disk is attached to whichever cluster
-mounts it next. See the README, "Shared resource group".
+Name of an existing resource group for what outlives the cluster: the Key Vault, the identities its
+namespaces read it as, and the disks of its persistent volumes. Everything else - the cluster, its
+own identity and external-dns's, the node resource group AKS deletes with it - stays per cluster.
+Two clusters that name the same group can hand workloads to each other: a namespace is the same
+identity in both, reading the same vault, and a disk is attached to whichever cluster mounts it
+next. See the README, "Shared resource group".
 
 The cluster identity is granted `Contributor` on the group, which the Azure Disk CSI driver needs to
 create, attach and delete disks outside the node resource group, and the cluster's Flux repository

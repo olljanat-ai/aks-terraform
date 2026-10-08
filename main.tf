@@ -285,6 +285,24 @@ module "aks" {
     name = var.sku_name
     tier = var.sku_tier
   }
+  # Persistent storage, or a stateless cluster without any - see persistent_storage_enabled. The
+  # Azure Disk and Azure Files CSI drivers and the snapshot controller are stated either way, so
+  # turning storage back on is a change Terraform sees. The Azure Blob driver, off unless asked for,
+  # is only turned off explicitly on a stateless cluster and otherwise left to AKS.
+  storage_profile = {
+    blob_csi_driver = var.persistent_storage_enabled ? null : {
+      enabled = false
+    }
+    disk_csi_driver = {
+      enabled = var.persistent_storage_enabled
+    }
+    file_csi_driver = {
+      enabled = var.persistent_storage_enabled
+    }
+    snapshot_controller = {
+      enabled = var.persistent_storage_enabled
+    }
+  }
   tags = local.cluster_tags
 
   disable_local_accounts = true

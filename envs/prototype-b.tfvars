@@ -1,6 +1,7 @@
 # Prototype cluster B: the same as aks-prototype-a (envs/prototype-a.tfvars), beside it in the same
 # resource group and network, on the same shared resources - so that workloads can be moved between
-# the two. shared/envs/prototype.tfvars is applied first.
+# the two - but stateless: no persistent storage at all. shared/envs/prototype.tfvars is applied
+# first.
 #
 #   terraform workspace select -or-create prototype-b
 #   terraform apply -var-file=envs/prototype-b.tfvars
@@ -37,10 +38,13 @@ key_vault_create = false
 dns_zone_name          = "onek8s.lol"
 internal_dns_zone_name = "internal.onek8s.lol"
 
-# The disks of the platform's `portable-disk` StorageClass go to resource_group_name rather than the
-# node resource group, so they outlive this cluster and can be attached to aks-prototype-a. The
-# cluster identity is granted a role of its own for disks there, and nothing else.
-portable_disks_enabled = true
+# Stateless: no CSI driver - Azure Disk, Azure Files, Azure Blob - and no snapshot controller, so
+# the cluster has no StorageClass and nothing to provision a PersistentVolumeClaim from. Hence no
+# portable disks either: nothing is granted for disks in resource_group_name, and the platform's
+# clusters/prototype-b runs no `portable-disk` StorageClass. Only workloads that keep no state run
+# here - the `example` team syncs `stateless/` of its repository, without boot-log.
+persistent_storage_enabled = false
+portable_disks_enabled     = false
 
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
@@ -94,8 +98,9 @@ default_node_pool = {
 #   }
 # }
 
-# The `example` team. Its own Flux configuration deploys apps/ of olljanat-ai/aks-fluxcd-example
-# into it, read with the token aks-fluxcd-platform syncs from the vault as `aks-fluxcd-example-git`
+# The `example` team. Its own Flux configuration deploys stateless/ of olljanat-ai/aks-fluxcd-example
+# into it - the apps of apps/ that keep no state, aks-hello but not boot-log, whose volume this
+# cluster cannot provide - read with the token aks-fluxcd-platform syncs from the vault as `aks-fluxcd-example-git`
 # (tenants/example), and its apps publish themselves through the shared Gateway. It keeps the
 # default closed ingress: a NetworkPolicy from aks-fluxcd-platform lets the Traefik pods in, and
 # nothing else.
@@ -103,7 +108,7 @@ managed_namespaces = {
   example = {
     flux = {
       url         = "https://github.com/olljanat-ai/aks-fluxcd-example"
-      path        = "./apps"
+      path        = "./stateless"
       secret_name = "aks-fluxcd-example-git"
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60

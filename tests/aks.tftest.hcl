@@ -3204,6 +3204,25 @@ run "portable_disks_get_a_role_for_disks_only" {
   }
 }
 
+run "a_stateless_cluster_plans" {
+  command = plan
+
+  variables {
+    persistent_storage_enabled = false
+  }
+}
+
+run "portable_disks_need_persistent_storage" {
+  command = plan
+
+  variables {
+    persistent_storage_enabled = false
+    portable_disks_enabled     = true
+  }
+
+  expect_failures = [var.portable_disks_enabled]
+}
+
 run "portable_disks_are_left_ungranted_when_grants_are_made_elsewhere" {
   command = plan
 

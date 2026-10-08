@@ -1202,6 +1202,19 @@ DESCRIPTION
   }
 }
 
+variable "persistent_storage_enabled" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+Whether the cluster has persistent storage at all. Set to `false` for a stateless cluster: AKS runs
+none of its CSI drivers - Azure Disk, Azure Files, Azure Blob - nor the snapshot controller, so the
+cluster has no StorageClass and a PersistentVolumeClaim has nothing to be provisioned from. Pods
+keep `emptyDir` and the other volumes that live and die with them. Cannot be combined with
+`portable_disks_enabled`.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "portable_disks_enabled" {
   type        = bool
   default     = false
@@ -1213,6 +1226,11 @@ cluster and can be attached to the next one. The cluster identity is granted a r
 told the group as `portable_disk_resource_group_name`.
 DESCRIPTION
   nullable    = false
+
+  validation {
+    condition     = !var.portable_disks_enabled || var.persistent_storage_enabled
+    error_message = "portable_disks_enabled needs persistent_storage_enabled: a cluster without the Azure Disk CSI driver creates no disks."
+  }
 }
 
 variable "private_cluster_enabled" {

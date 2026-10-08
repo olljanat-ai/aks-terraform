@@ -26,6 +26,7 @@ jobs:
       CLUSTER: aks-prototype-b
       AAD_SERVICE_PRINCIPAL_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AAD_SERVICE_PRINCIPAL_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
     steps:
       - name: Sign in to Azure
         env:
@@ -46,7 +47,7 @@ jobs:
           for i in $(seq 1 75); do
             echo "== $(date -u +%T)"
             if az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$KUBECONFIG" --overwrite-existing --only-show-errors \
-              && kubelogin convert-kubeconfig -l spn --client-id "$AAD_SERVICE_PRINCIPAL_CLIENT_ID" \
+              && kubelogin convert-kubeconfig -l spn --client-id "$AAD_SERVICE_PRINCIPAL_CLIENT_ID" --client-secret "$AAD_SERVICE_PRINCIPAL_CLIENT_SECRET" --tenant-id "$AZURE_TENANT_ID" \
               && kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A \
               && kubectl get validatingadmissionpolicy no-persistent-storage; then
               exit 0
@@ -91,6 +92,7 @@ jobs:
       CLUSTER: aks-prototype-b
       AAD_SERVICE_PRINCIPAL_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AAD_SERVICE_PRINCIPAL_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
     steps:
       - name: Sign in to Azure
         env:
@@ -111,7 +113,7 @@ jobs:
           for i in $(seq 1 75); do
             echo "== $(date -u +%T)"
             if az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$KUBECONFIG" --overwrite-existing --only-show-errors \
-              && kubelogin convert-kubeconfig -l spn --client-id "$AAD_SERVICE_PRINCIPAL_CLIENT_ID" \
+              && kubelogin convert-kubeconfig -l spn --client-id "$AAD_SERVICE_PRINCIPAL_CLIENT_ID" --client-secret "$AAD_SERVICE_PRINCIPAL_CLIENT_SECRET" --tenant-id "$AZURE_TENANT_ID" \
               && kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A \
               && kubectl get validatingadmissionpolicy no-persistent-storage; then
               exit 0

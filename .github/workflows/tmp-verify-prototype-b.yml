@@ -77,9 +77,9 @@ jobs:
           az keyvault secret list --vault-name kv-sec-prototype-shared --query '[].name' -o tsv 2>&1 || true
           az k8s-configuration flux show -g "$RESOURCE_GROUP" -c "$CLUSTER" -t managedClusters -n example -o json
           kubectl logs -n flux-system deploy/source-controller --tail=60 | grep -i example || true
-          kubectl wait --for=condition=Ready kustomizations.kustomize.toolkit.fluxcd.io --all -n flux-system --timeout=10m
-          kubectl wait --for=condition=Ready helmreleases.helm.toolkit.fluxcd.io --all -n flux-system --timeout=10m
-          kubectl wait --for=condition=Ready kustomizations.kustomize.toolkit.fluxcd.io example-apps -n example --timeout=10m
+          kubectl wait --for=condition=Ready kustomizations.kustomize.toolkit.fluxcd.io --all -n flux-system --timeout=5m
+          kubectl wait --for=condition=Ready helmreleases.helm.toolkit.fluxcd.io --all -n flux-system --timeout=5m
+          kubectl wait --for=condition=Ready kustomizations.kustomize.toolkit.fluxcd.io example-apps -n example --timeout=5m
           kubectl wait --for=condition=Available deployment aks-hello -n example --timeout=5m
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io,gitrepositories.source.toolkit.fluxcd.io -A
           kubectl get pods -A -o wide

@@ -1,7 +1,7 @@
-name: Deploy prototype-b (temporary)
+name: Deploy prototype (temporary)
 
-# Temporary: applies prototype-shared and then prototype-b from a pull request, to bring the
-# stateless aks-prototype-b up. Remove before merging.
+# Temporary: applies prototype-shared and then both clusters from a pull request - the shared
+# container registry, and each cluster's identities on it. Remove before merging.
 on:
   pull_request:
     paths:
@@ -19,6 +19,14 @@ jobs:
     uses: ./.github/workflows/deploy-prototype.yml
     with:
       stack: prototype-shared
+      action: apply
+    secrets: inherit
+
+  prototype-a:
+    needs: shared
+    uses: ./.github/workflows/deploy-prototype.yml
+    with:
+      stack: prototype-a
       action: apply
     secrets: inherit
 

@@ -15,6 +15,11 @@ resource_group_name = "rg-aks-prototype"
 # false. Key Vault names are global; pick another if this one is taken.
 key_vault_name = "kv-sec-prototype-shared"
 
+# The environment's container registry: the aks-hello image, and the example team's manifests as an
+# OCI artifact, which both clusters' Flux configurations for the team read. Registry names are global;
+# pick another if this one is taken.
+container_registry_name = "acrsecprototypeshared"
+
 # Every namespace with a share of the vault in any of the clusters: the platform's ingress-gateway
 # (listener certificates), flux-system (the Flux webhook's token) and every managed namespace of the
 # clusters. A cluster's plan fails on a namespace missing here, since its identity is not there to

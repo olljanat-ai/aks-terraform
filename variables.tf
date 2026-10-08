@@ -796,6 +796,7 @@ variable "managed_namespaces" {
       path                  = optional(string, "./")
       secret_name           = optional(string)
       sync_interval_seconds = optional(number, 300)
+      tag                   = optional(string, "latest")
     }))
     labels = optional(map(string), {})
     network_policy = optional(object({
@@ -930,8 +931,10 @@ managed_namespaces = {
 }
 ```
 
-- `url` - `https://` or `ssh://` URL of the repository.
-- `branch` - Branch to sync. Defaults to `main`.
+- `url` - `https://` or `ssh://` URL of the repository - or `oci://` of an OCI artifact the
+  repository is published as, in `container_registry_name`: see below.
+- `branch` - Branch to sync. Defaults to `main`. Git only.
+- `tag` - Tag of the OCI artifact to sync. Defaults to `latest`. OCI only.
 - `path` - Directory in the repository to apply. Defaults to the top.
 - `secret_name` - For a private repository: a Secret in the namespace that Flux reads it with -
   `username` and `password` for HTTPS, `identity` and `known_hosts` for SSH. Nothing secret passes
@@ -939,6 +942,19 @@ managed_namespaces = {
   Vault. Leave it unset for a public repository.
 - `sync_interval_seconds` - How often the repository is read and applied, and how soon a failed
   apply is retried. Defaults to 300; at least 60.
+
+An `oci://` source is an artifact in the cluster's container registry (`container_registry_name`),
+which the team's repository publishes there - `flux push artifact`. The Flux source-controller reads
+it as an identity of the cluster's own with `AcrPull`, through workload identity: no secret, and no
+`secret_name`.
+
+```hcl
+flux = {
+  url  = "oci://contoso.azurecr.io/manifests/team-payments-deploy"
+  tag  = "main"
+  path = "./apps"
+}
+```
 
 The repository is applied by the extension's `flux-applier` service account in the namespace, and
 the AKS Flux extension refuses references across namespaces: its manifests land in this namespace
@@ -1048,9 +1064,24 @@ DESCRIPTION
   validation {
     condition = alltrue([
       for namespace in values(var.managed_namespaces) :
-      namespace.flux == null || can(regex("^(https?|ssh)://", namespace.flux.url))
+      namespace.flux == null || can(regex("^(https?|ssh|oci)://", namespace.flux.url))
     ])
-    error_message = "managed_namespaces[*].flux.url must start with https://, http:// or ssh://."
+    error_message = "managed_namespaces[*].flux.url must start with https://, http://, ssh:// or oci://."
+  }
+  # An OCI artifact is read with the cluster's own identity, never a secret.
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.flux == null || try(!startswith(namespace.flux.url, "oci://") || namespace.flux.secret_name == null, false)
+    ])
+    error_message = "managed_namespaces[*].flux.secret_name cannot be set with an oci:// url: the artifact is read with the cluster's own identity."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.flux == null || try(!startswith(namespace.flux.url, "oci://") || var.container_registry_name != null, false)
+    ])
+    error_message = "managed_namespaces[*].flux.url is an oci:// artifact, so container_registry_name has to name the registry the cluster reads it from."
   }
   validation {
     condition = alltrue([
@@ -1200,6 +1231,23 @@ DESCRIPTION
     condition     = var.network_role_assignment_scope == null || contains(["subnet", "virtual_network"], coalesce(var.network_role_assignment_scope, ""))
     error_message = "network_role_assignment_scope must be either \"subnet\" or \"virtual_network\", or left unset."
   }
+}
+
+variable "container_registry_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of an existing Azure Container Registry the cluster pulls from - an environment's shared one, see
+shared/. The kubelet identity is granted `AcrPull` on it for images, so pods need no pull secret;
+and the Flux source-controller gets an identity of the cluster's own with `AcrPull`, federated
+through workload identity, for the `oci://` sources of managed_namespaces[*].flux. Null for none.
+DESCRIPTION
+}
+
+variable "container_registry_resource_group_name" {
+  type        = string
+  default     = null
+  description = "Resource group of container_registry_name. Defaults to resource_group_name."
 }
 
 variable "persistent_storage_enabled" {

@@ -23,3 +23,8 @@ output "dns_zone_name_servers" {
   description = "Name servers of the public zone, for the domain's NS records at its registrar. Null without a zone."
   value       = one(azurerm_dns_zone.this[*].name_servers)
 }
+
+output "container_registry_login_server" {
+  description = "Login server of the environment's container registry, `<name>.azurecr.io`. Null without one."
+  value       = one(azurerm_container_registry.this[*].login_server)
+}

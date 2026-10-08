@@ -125,3 +125,19 @@ variable "subscription_id" {
   default     = null
   description = "Subscription to deploy into. Defaults to the one the Azure CLI or the ARM_SUBSCRIPTION_ID environment variable points at."
 }
+
+variable "container_registry_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of the environment's Azure Container Registry, created here: the images the clusters run, and
+the teams' Kubernetes manifests as OCI artifacts that their Flux configurations read - each cluster
+with an identity of its own, so nothing is stored to read it with. Registry names are global, 5 to 50
+letters and digits. Null for none.
+DESCRIPTION
+
+  validation {
+    condition     = var.container_registry_name == null || can(regex("^[a-zA-Z0-9]{5,50}$", coalesce(var.container_registry_name, "-")))
+    error_message = "container_registry_name must be 5 to 50 letters and digits."
+  }
+}

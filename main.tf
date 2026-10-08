@@ -682,8 +682,15 @@ resource "azapi_resource" "flux_extension" {
   body = {
     properties = {
       autoUpgradeMinorVersion = true
-      extensionType           = "microsoft.flux"
-      releaseTrain            = "Stable"
+      # The source-controller's workload identity, for the OCI artifacts in the cluster's registry -
+      # see container_registry.tf. Empty without a registry.
+      configurationSettings = local.flux_source_identity_enabled ? {
+        "workloadIdentity.enable"        = "true"
+        "workloadIdentity.azureClientId" = azurerm_user_assigned_identity.flux_source[0].client_id
+        "workloadIdentity.azureTenantId" = data.azurerm_client_config.current.tenant_id
+      } : {}
+      extensionType = "microsoft.flux"
+      releaseTrain  = "Stable"
       scope = {
         cluster = {
           releaseNamespace = "flux-system"
@@ -692,11 +699,13 @@ resource "azapi_resource" "flux_extension" {
     }
   }
 
+  # The source-controller's identity has to be trusted before the controller is started with it.
+  #
   # AKS runs one operation on a cluster at a time and refuses the next with "Another operation is
   # in progress". parent_id waits only for the cluster itself, not for what the module does to it
   # afterwards - its update of the system node pool - so on a new cluster the two ran at once and
   # the pool's update failed. Waiting for the whole module keeps them apart.
-  depends_on = [module.aks]
+  depends_on = [module.aks, azurerm_federated_identity_credential.flux_source]
 }
 
 # A private repository is read with the credential in flux_git_credentials: a token over HTTPS, or an

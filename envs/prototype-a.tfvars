@@ -41,6 +41,11 @@ internal_dns_zone_name = "internal.onek8s.lol"
 # cluster identity is granted a role of its own for disks there, and nothing else.
 portable_disks_enabled = true
 
+# SHARED. The environment's container registry, created by shared/ and looked up here. The kubelet
+# pulls the images from it, and the Flux source-controller the example team's manifests - each as an
+# identity of this cluster's own, with AcrPull. Nothing secret to read it with.
+container_registry_name = "acrsecprototypeshared"
+
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 # private_dns_zone_resource_group_name = "rg-network"
@@ -94,16 +99,18 @@ default_node_pool = {
 # }
 
 # The `example` team. Its own Flux configuration deploys apps/ of olljanat-ai/aks-fluxcd-example
-# into it, read with the token aks-fluxcd-platform syncs from the vault as `aks-fluxcd-example-git`
-# (tenants/example), and its apps publish themselves through the shared Gateway. It keeps the
+# into it, from the OCI artifact the repository is published as in the shared registry, and its apps
+# publish themselves through the shared Gateway. It keeps the
 # default closed ingress: a NetworkPolicy from aks-fluxcd-platform lets the Traefik pods in, and
 # nothing else.
 managed_namespaces = {
   example = {
     flux = {
-      url         = "https://github.com/olljanat-ai/aks-fluxcd-example"
-      path        = "./apps"
-      secret_name = "aks-fluxcd-example-git"
+      # Published there by aks-fluxcd-example on every push to main (flux push artifact), and read by
+      # the source-controller as this cluster's identity.
+      url  = "oci://acrsecprototypeshared.azurecr.io/manifests/aks-fluxcd-example"
+      tag  = "main"
+      path = "./apps"
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60
     }

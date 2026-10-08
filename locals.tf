@@ -22,29 +22,52 @@ locals {
   # on it - and in the portal.
   managed_namespace_flux_configurations = {
     for name, namespace in var.managed_namespaces : name => {
-      properties = {
-        gitRepository = merge({
-          repositoryRef = {
-            branch = namespace.flux.branch
+      properties = merge(
+        {
+          kustomizations = {
+            apps = {
+              path                   = namespace.flux.path
+              prune                  = true
+              syncIntervalInSeconds  = namespace.flux.sync_interval_seconds
+              retryIntervalInSeconds = namespace.flux.sync_interval_seconds
+              wait                   = true
+            }
           }
-          syncIntervalInSeconds = namespace.flux.sync_interval_seconds
-          url                   = namespace.flux.url
-        }, namespace.flux.secret_name == null ? {} : { localAuthRef = namespace.flux.secret_name })
-        kustomizations = {
-          apps = {
-            path                   = namespace.flux.path
-            prune                  = true
-            syncIntervalInSeconds  = namespace.flux.sync_interval_seconds
-            retryIntervalInSeconds = namespace.flux.sync_interval_seconds
-            wait                   = true
+          namespace = name
+          scope     = "namespace"
+        },
+        # An OCI artifact in the cluster's registry, read as the source-controller's own identity -
+        # see flux_source in container_registry.tf - or a Git repository, read with the Secret named
+        # in secret_name, or anonymously. One of the two is null, which merge() leaves out: the two
+        # differ in shape, which a conditional between them could not have.
+        startswith(namespace.flux.url, "oci://") ? {
+          sourceKind = "OCIRepository"
+          ociRepository = {
+            repositoryRef = {
+              tag = namespace.flux.tag
+            }
+            syncIntervalInSeconds = namespace.flux.sync_interval_seconds
+            url                   = namespace.flux.url
+            useWorkloadIdentity   = true
           }
-        }
-        namespace  = name
-        scope      = "namespace"
-        sourceKind = "GitRepository"
-      }
+        } : null,
+        startswith(namespace.flux.url, "oci://") ? null : {
+          sourceKind = "GitRepository"
+          gitRepository = merge({
+            repositoryRef = {
+              branch = namespace.flux.branch
+            }
+            syncIntervalInSeconds = namespace.flux.sync_interval_seconds
+            url                   = namespace.flux.url
+          }, namespace.flux.secret_name == null ? {} : { localAuthRef = namespace.flux.secret_name })
+        },
+      )
     } if namespace.flux != null
   }
+
+  # The Flux source-controller reads OCI artifacts from the cluster's registry as an identity of its
+  # own, through workload identity. Only with a registry, and only where Flux runs.
+  flux_source_identity_enabled = var.container_registry_name != null && local.flux_extension_enabled
 
   # The credential Flux reads a private repository with. Azure takes protected settings base64
   # encoded, and the HTTPS user in the open next to the repository URL.

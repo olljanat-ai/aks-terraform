@@ -78,10 +78,15 @@ mock_provider "azapi" {}
 mock_provider "time" {}
 
 # The cluster module brings its own providers and its own registry lookups; none of that is under
-# test here, so it is replaced by the one output the root module reads back.
+# test here, so it is replaced by the outputs the root module reads back.
 override_module {
   target = module.aks
   outputs = {
+    kubelet_identity = {
+      clientId   = "77777777-7777-7777-7777-777777777777"
+      objectId   = "88888888-8888-8888-8888-888888888888"
+      resourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mc_rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-test-agentpool"
+    }
     resource_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test"
     oidc_issuer_profile_issuer_url = "https://swedencentral.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/11111111-1111-1111-1111-111111111111/"
   }
@@ -3310,4 +3315,78 @@ run "sharing_a_vault_needs_its_name" {
   }
 
   expect_failures = [var.key_vault_create]
+}
+
+# ----------------------------------------------------------------------------------------------
+# Container registry: images and OCI manifests read as the cluster's own identities
+# ----------------------------------------------------------------------------------------------
+
+run "without_a_registry_nothing_is_granted_on_one" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      length(azurerm_role_assignment.kubelet_container_registry_pull) == 0,
+      length(azurerm_user_assigned_identity.flux_source) == 0,
+    ])
+    error_message = "Without container_registry_name the cluster should be granted nothing on a registry."
+  }
+}
+
+run "an_oci_tenant_reads_its_artifact_as_the_source_controller_identity" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_container_registry.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerRegistry/registries/acrtest"
+    }
+  }
+
+  variables {
+    container_registry_name = "acrtest"
+    managed_namespaces = {
+      team-payments = {
+        flux = {
+          url  = "oci://acrtest.azurecr.io/manifests/team-payments"
+          tag  = "main"
+          path = "./apps"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.sourceKind == "OCIRepository",
+      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.ociRepository.url == "oci://acrtest.azurecr.io/manifests/team-payments",
+      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.ociRepository.repositoryRef.tag == "main",
+      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.ociRepository.useWorkloadIdentity == true,
+    ])
+    error_message = "An oci:// tenant should get an OCIRepository source read with workload identity."
+  }
+  assert {
+    condition = alltrue([
+      azurerm_federated_identity_credential.flux_source[0].subject == "system:serviceaccount:flux-system:source-controller",
+      azurerm_role_assignment.flux_source_container_registry_pull[0].role_definition_name == "AcrPull",
+      azapi_resource.flux_extension[0].body.properties.configurationSettings["workloadIdentity.enable"] == "true",
+    ])
+    error_message = "The source-controller should run as an identity of its own with AcrPull on the registry."
+  }
+}
+
+run "an_oci_tenant_needs_a_registry" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        flux = {
+          url = "oci://acrtest.azurecr.io/manifests/team-payments"
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
 }

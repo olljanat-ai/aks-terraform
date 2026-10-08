@@ -1,0 +1,100 @@
+name: Verify prototype-b (temporary)
+
+# Temporary: once the rebuilt aks-prototype-b is up, deletes AKS's two StorageClasses (the platform's
+# no-persistent-storage policy then refuses their re-creation), checks that Flux is in sync and the
+# test application answers without boot-log, and an hour later that no StorageClass has come back.
+# Remove before merging.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/tmp-verify-prototype-b.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: prototype
+    timeout-minutes: 240
+    env:
+      RESOURCE_GROUP: rg-aks-prototype
+      CLUSTER: aks-prototype-b
+      AAD_SERVICE_PRINCIPAL_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AAD_SERVICE_PRINCIPAL_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    steps:
+      - name: Sign in to Azure
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          az login --service-principal --username "$AZURE_CLIENT_ID" --password "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" --output none
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+          sudo az aks install-cli --only-show-errors >/dev/null
+
+      # The destroy and the new deploy run in the other workflow; wait for the new cluster to be up and
+      # its platform configuration to have applied the stateless policy.
+      - name: Wait for the rebuilt cluster
+        run: |
+          set -u
+          for i in $(seq 1 120); do
+            state=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query provisioningState -o tsv 2>/dev/null || echo none)
+            created=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query 'systemData.createdAt' -o tsv 2>/dev/null || echo none)
+            echo "$(date -u +%T) cluster: $state, created $created"
+            if [ "$state" = "Succeeded" ] && [[ "$created" > "2026-10-08T17:30" ]]; then
+              az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --overwrite-existing --only-show-errors
+              KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l spn
+              if KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubectl get validatingadmissionpolicy no-persistent-storage >/dev/null 2>&1; then
+                echo "no-persistent-storage is in place."
+                exit 0
+              fi
+            fi
+            sleep 60
+          done
+          echo "::error::The rebuilt cluster and its no-persistent-storage policy did not appear within two hours."
+          exit 1
+
+      - name: Delete AKS's StorageClasses
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          set -x
+          kubectl get storageclass
+          kubectl delete storageclass default managed-csi-premium-v2 --ignore-not-found
+          sleep 120
+          kubectl get storageclass
+          test -z "$(kubectl get storageclass -o name)"
+
+      - name: Flux in sync, aks-hello up, no boot-log
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          set -x
+          kubectl wait --for=condition=Ready kustomizations.kustomize.toolkit.fluxcd.io --all -A --timeout=20m
+          kubectl wait --for=condition=Ready helmreleases.helm.toolkit.fluxcd.io --all -A --timeout=10m
+          kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io,gitrepositories.source.toolkit.fluxcd.io -A
+          kubectl get pods -A -o wide
+          kubectl get all,httproute,pvc -n example
+          ! kubectl get deployment -n example boot-log
+          ! kubectl get pvc -n example boot-log
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 10 https://hello-b.onek8s.lol/healthz; then echo; break; fi
+            sleep 30
+          done
+          curl -fsS --max-time 10 https://hello-b.onek8s.lol/ | head -c 500; echo
+          ! curl -fsS --max-time 10 https://hello-b.onek8s.lol/boot-log/log.txt
+
+      - name: An hour later, still no StorageClass
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          sleep 3600
+          # The token kubelogin cached may have expired in the meantime; it renews it itself.
+          set -x
+          kubectl get storageclass
+          kubectl get events -A --field-selector reason=FailedCreate 2>/dev/null | tail -n 20 || true
+          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A
+          curl -fsS --max-time 10 https://hello-b.onek8s.lol/healthz; echo
+          if [ -n "$(kubectl get storageclass -o name)" ]; then
+            echo "::error::StorageClasses came back."
+            exit 1
+          fi

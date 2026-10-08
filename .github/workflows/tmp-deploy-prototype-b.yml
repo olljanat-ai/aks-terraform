@@ -4,6 +4,12 @@ name: Deploy prototype-b (temporary)
 # stateless aks-prototype-b up. Remove before merging.
 on:
   pull_request:
+    paths:
+      - "**.tf"
+      - "envs/**"
+      - "shared/**"
+      - "modules/**"
+      - .github/workflows/deploy-prototype.yml
 
 permissions:
   contents: read

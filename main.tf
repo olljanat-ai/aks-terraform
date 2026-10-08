@@ -642,6 +642,9 @@ resource "azapi_resource" "maintenance_configuration" {
   }
   # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates it.
   schema_validation_enabled = false
+
+  # After the whole module, like the Flux extension: AKS runs one operation on a cluster at a time.
+  depends_on = [module.aks]
 }
 
 # GitOps through Flux, for a cluster that names a repository in flux_git_repository, or a managed
@@ -670,6 +673,12 @@ resource "azapi_resource" "flux_extension" {
       }
     }
   }
+
+  # AKS runs one operation on a cluster at a time and refuses the next with "Another operation is
+  # in progress". parent_id waits only for the cluster itself, not for what the module does to it
+  # afterwards - its update of the system node pool - so on a new cluster the two ran at once and
+  # the pool's update failed. Waiting for the whole module keeps them apart.
+  depends_on = [module.aks]
 }
 
 # A private repository is read with the credential in flux_git_credentials: a token over HTTPS, or an
@@ -747,6 +756,9 @@ resource "azapi_resource" "managed_namespace" {
   }
   # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates it.
   schema_validation_enabled = false
+
+  # After the whole module, like the Flux extension: AKS runs one operation on a cluster at a time.
+  depends_on = [module.aks]
 }
 
 # Namespace-scoped access, granted on the namespace resource rather than on the cluster: a group or

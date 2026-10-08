@@ -55,8 +55,6 @@ on:
     paths:
       - .github/workflows/renew-certificate.yml
       - shared/envs/prototype.tfvars
-  # Temporary: issue the certificate into the new shared vault from this pull request.
-  pull_request:
   workflow_dispatch:
     inputs:
       environment:

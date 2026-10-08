@@ -35,12 +35,42 @@ data "azurerm_key_vault" "this" {
 # in that namespace. External Secrets Operator has no Azure identity of its own: a SecretStore in the
 # namespace names that service account, and the operator requests a token for it on every read - so a
 # namespace's store can read that namespace's secrets and no others.
+#
+# With a shared resource group the identities are shared too: one per namespace, in the shared
+# group, named after the vault rather than the cluster - created by the configuration that creates
+# the vault, and looked up by every other. Each cluster federates the identity with its own service
+# account (azurerm_federated_identity_credential.key_vault), so a namespace is the same principal,
+# with the same client ID and the same grants, in every cluster that shares the vault. Without one,
+# every cluster has identities of its own, in its own resource group.
 resource "azurerm_user_assigned_identity" "key_vault" {
-  for_each = local.key_vault_namespaces
+  for_each = local.key_vault_identity_namespaces
 
   location            = var.location
-  name                = "${local.managed_identity_name}-kv-${each.key}"
-  resource_group_name = var.resource_group_name
+  name                = local.key_vault_identities_shared ? "id-${var.key_vault_name}-${each.key}" : "${local.managed_identity_name}-kv-${each.key}"
+  resource_group_name = local.key_vault_identities_shared ? var.shared_resource_group_name : var.resource_group_name
+}
+
+# The shared identities of a cluster that shares another's vault. A namespace has to have been given
+# a share by the configuration that creates the vault - in its managed_namespaces or
+# key_vault_namespaces - for its identity to be there to find.
+data "azurerm_user_assigned_identity" "key_vault" {
+  for_each = local.key_vault_identities_shared && !local.key_vault_owned ? local.key_vault_namespaces : toset([])
+
+  name                = "id-${var.key_vault_name}-${each.key}"
+  resource_group_name = var.shared_resource_group_name
+}
+
+# One credential per cluster on each identity, named after the cluster: Azure allows 20 on an
+# identity, so up to 20 clusters can share a namespace's identity at once. Each is destroyed with its
+# cluster's configuration, and the identity stays for the rest.
+resource "azurerm_federated_identity_credential" "key_vault" {
+  for_each = local.key_vault_namespaces
+
+  name                      = "aks-${var.name}"
+  user_assigned_identity_id = local.key_vault_identities[each.key].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_profile_issuer_url
+  subject                   = "system:serviceaccount:${each.key}:${local.key_vault_service_account}"
 
   lifecycle {
     # A namespace's prefix must not be the start of another namespace's: `team--a` would own every
@@ -53,23 +83,16 @@ resource "azurerm_user_assigned_identity" "key_vault" {
   }
 }
 
-resource "azurerm_federated_identity_credential" "key_vault" {
-  for_each = local.key_vault_namespaces
-
-  name                      = "aks-${var.name}"
-  user_assigned_identity_id = azurerm_user_assigned_identity.key_vault[each.key].id
-  audience                  = ["api://AzureADTokenExchange"]
-  issuer                    = module.aks.oidc_issuer_profile_issuer_url
-  subject                   = "system:serviceaccount:${each.key}:${local.key_vault_service_account}"
-}
-
 # Read access to the namespace's own secrets. The condition gates reading a secret's value only: the
 # names of every secret in the vault can still be listed, because Key Vault evaluates a condition on
 # listing against the whole collection rather than secret by secret, and a name condition there
 # refuses the list outright. A certificate's private key is the secret behind it, under the same name,
 # so a certificate is read the same way.
+#
+# Granted with the identity: a shared identity is granted once, by the configuration that creates
+# it, and every cluster federated with it reads with that one grant.
 resource "azurerm_role_assignment" "key_vault_namespace_reader" {
-  for_each = var.create_role_assignments ? local.key_vault_namespaces : toset([])
+  for_each = var.create_role_assignments ? local.key_vault_identity_namespaces : toset([])
 
   principal_id         = azurerm_user_assigned_identity.key_vault[each.key].principal_id
   scope                = local.key_vault_id

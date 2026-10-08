@@ -610,7 +610,7 @@ in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (list
 
 | Who | Role on the vault | Condition |
 | --- | --- | --- |
-| The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` | `Key Vault Secrets User` | Reads the value of a secret only if it is the namespace's own |
+| The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` - or `id-<key_vault_name>-<namespace>`, shared between clusters, with a [shared resource group](#shared-resource-group) | `Key Vault Secrets User` | Reads the value of a secret only if it is the namespace's own |
 | The namespace's `writer` and `admin` grants in `managed_namespaces` | `Key Vault Secrets Officer` | Creates, changes, deletes, backs up, restores, recovers and purges the namespace's own secrets only |
 | `entra_admin_group_object_ids` | `Key Vault Administrator` | None: the whole vault, certificates included |
 
@@ -644,15 +644,21 @@ az keyvault secret set --vault-name <key_vault_name> --name example--api-key --v
 ## Shared resource group
 
 `shared_resource_group_name` names an existing resource group for **what outlives the cluster**:
-the Key Vault and the disks of persistent volumes. Everything else stays per cluster - the cluster,
-its identities, and the node resource group AKS creates for it and deletes with it. Two clusters
+the Key Vault, the identities the namespaces read it as, and the disks of persistent volumes.
+Everything else stays per cluster - the cluster, and the node resource group AKS creates for it and
+deletes with it. Two clusters
 that name the same group can hand workloads to each other, which is how a cluster is replaced
 rather than upgraded in place: build the next one beside it, move the workloads over, and retire it.
 
 | | In the shared group | |
 | --- | --- | --- |
-| Key Vault | Created by the cluster with `key_vault_create = true` (the default), looked up by every other with `key_vault_create = false` | Each cluster federates identities of its own with its namespaces' `key-vault` service accounts and grants them their share of the vault, so a namespace reads the same secrets in every cluster. The vault-wide grants - `Key Vault Administrator` for the admin groups, `Key Vault Secrets Officer` for the namespaces' writers - and the Flux webhook's token are made once, by the cluster that creates the vault. |
+| Key Vault | Created by the cluster with `key_vault_create = true` (the default), looked up by every other with `key_vault_create = false` | Every grant on it - `Key Vault Administrator` for the admin groups, `Key Vault Secrets Officer` for the namespaces' writers, the namespaces' own read access - and the Flux webhook's token are made once, by the cluster that creates the vault. |
+| Namespace identities | `id-<key_vault_name>-<namespace>`, created with the vault and looked up by every other cluster | One identity per namespace, not per cluster: each cluster adds a federated credential of its own (`aks-<cluster name>`) to it, for its namespace's `key-vault` service account. A namespace is the same principal, with the same client ID and the same grants, wherever it runs - including anything granted to it outside this repository. Azure allows 20 credentials on an identity, so 20 clusters at once. A namespace with a share in a cluster that looks the vault up needs one in the configuration that creates it, or its identity is not there to find. |
 | Disks | Created by the Azure Disk CSI driver, for the platform's `portable-disk` StorageClass | The cluster identity holds `Contributor` on the group, which the driver needs to create, attach and delete a disk outside the node resource group. The group's name reaches the Flux repository as `shared_resource_group_name`. The StorageClass keeps a disk when its claim is deleted (`Retain`), and is zone-redundant, so a disk attaches to a node in any zone. |
+
+The cluster's own identity and external-dns's stay per cluster, in `resource_group_name`. They act
+for the cluster rather than for a workload - the network, the DNS records the cluster owns - so
+there is nothing for them to carry over to the next one.
 
 `Contributor` on the group is management plane access to the vault too. It reads no secret - the
 vault authorizes data through Azure RBAC alone - but it could delete the vault, which soft delete
@@ -686,6 +692,13 @@ token, `azurerm_key_vault_secret.flux_github_webhook[0]`, remove and import that
 `https://kv-proto-aks-free.vault.azure.net/secrets/flux-system--github-webhook-token/<version>` ID.
 The commands run against the environment's remote state, from a shell with the backend configured
 as the deploy workflow configures it.
+
+The namespaces' identities are not moved: they are **replaced** by shared ones named after the
+vault. Azure does not move a user assigned identity between resource groups, and the name changes
+anyway. The same apply creates the new identities, their credentials and grants, and hands Flux their
+client IDs; the old ones are destroyed. Secrets already synced into the cluster stay, and External
+Secrets reads as the new identities once the grants have propagated - a few minutes at most. Anything
+granted to the old identities outside this repository has to be granted to the new ones.
 
 [agcaddon]: https://learn.microsoft.com/azure/application-gateway/for-containers/quickstart-deploy-application-gateway-for-containers-alb-controller-addon
 [gatewayapi]: https://gateway-api.sigs.k8s.io/

@@ -45,6 +45,13 @@ mock_provider "azurerm" {
       vault_uri = "https://kv-aks-shared.vault.azure.net/"
     }
   }
+  mock_data "azurerm_user_assigned_identity" {
+    defaults = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-kv-aks-shared-example"
+      principal_id = "77777777-7777-7777-7777-777777777777"
+      client_id    = "88888888-8888-8888-8888-888888888888"
+    }
+  }
   mock_data "azurerm_dns_zone" {
     defaults = {
       id = "/subscriptions/55555555-5555-5555-5555-555555555555/resourceGroups/rg-dns/providers/Microsoft.Network/dnsZones/contoso.com"
@@ -2858,7 +2865,7 @@ run "rejects_a_namespace_whose_share_would_overlap_another" {
     }
   }
 
-  expect_failures = [azurerm_user_assigned_identity.key_vault]
+  expect_failures = [azurerm_federated_identity_credential.key_vault]
 }
 
 run "rejects_a_vault_name_azure_would_refuse" {
@@ -3190,10 +3197,14 @@ run "the_vault_and_the_disks_go_to_the_shared_group" {
     condition = alltrue([
       azurerm_key_vault.this[0].resource_group_name == "rg-aks-shared",
       length(data.azurerm_key_vault.this) == 0,
-      # The namespaces' identities are the cluster's own and stay with it.
-      azurerm_user_assigned_identity.key_vault["ingress-gateway"].resource_group_name == "rg-aks-test",
+      # The namespaces' identities are shared with the vault, and named after it.
+      azurerm_user_assigned_identity.key_vault["ingress-gateway"].resource_group_name == "rg-aks-shared",
+      azurerm_user_assigned_identity.key_vault["ingress-gateway"].name == "id-kv-aks-test-ingress-gateway",
+      length(data.azurerm_user_assigned_identity.key_vault) == 0,
+      keys(azurerm_role_assignment.key_vault_namespace_reader) == ["ingress-gateway"],
+      azurerm_federated_identity_credential.key_vault["ingress-gateway"].name == "aks-aks-test",
     ])
-    error_message = "The vault should be created in the shared resource group, and the identities reading it in the cluster's."
+    error_message = "The vault and the namespaces' identities should be created in the shared resource group, the identities named after the vault."
   }
   assert {
     condition = alltrue([
@@ -3251,11 +3262,23 @@ run "a_second_cluster_reads_the_shared_vault_and_grants_only_its_own" {
   }
   assert {
     condition = alltrue([
-      keys(azurerm_user_assigned_identity.key_vault) == ["example", "flux-system", "ingress-gateway"],
-      alltrue([for assignment in azurerm_role_assignment.key_vault_namespace_reader : assignment.scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.KeyVault/vaults/kv-aks-shared"]),
-      length(azurerm_role_assignment.key_vault_namespace_reader) == 3,
+      length(azurerm_user_assigned_identity.key_vault) == 0,
+      keys(data.azurerm_user_assigned_identity.key_vault) == ["example", "flux-system", "ingress-gateway"],
+      data.azurerm_user_assigned_identity.key_vault["example"].name == "id-kv-aks-shared-example",
+      data.azurerm_user_assigned_identity.key_vault["example"].resource_group_name == "rg-aks-shared",
+      length(azurerm_role_assignment.key_vault_namespace_reader) == 0,
     ])
-    error_message = "Every namespace of the second cluster should still read its own share, of the shared vault."
+    error_message = "A cluster sharing the vault should look the namespaces' shared identities up, and leave their grants to the vault's owner."
+  }
+  assert {
+    condition = alltrue([
+      keys(azurerm_federated_identity_credential.key_vault) == ["example", "flux-system", "ingress-gateway"],
+      azurerm_federated_identity_credential.key_vault["example"].name == "aks-aks-test",
+      azurerm_federated_identity_credential.key_vault["example"].user_assigned_identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-kv-aks-shared-example",
+      azurerm_federated_identity_credential.key_vault["example"].subject == "system:serviceaccount:example:key-vault",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_client_id_example == "88888888-8888-8888-8888-888888888888",
+    ])
+    error_message = "The cluster should federate each shared identity with its own service account, and hand Flux the shared client IDs."
   }
   assert {
     condition = alltrue([

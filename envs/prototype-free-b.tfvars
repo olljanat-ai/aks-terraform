@@ -28,10 +28,12 @@ virtual_network_name                = "vnet-aks-prototype"
 node_subnet_name                    = "snet-aks-nodes"
 virtual_network_resource_group_name = "rg-network"
 
-# aks-prototype-free's Key Vault, looked up in shared_resource_group_name rather than created. Every
-# namespace here reads its own share of it with an identity of this cluster's, so the example team
-# finds the secrets it has in aks-prototype-free. The vault-wide grants - the admin groups, the
-# namespaces' writers - and the Flux webhook's token are aks-prototype-free's to make.
+# aks-prototype-free's Key Vault, looked up in shared_resource_group_name rather than created, and
+# so are the namespaces' identities (`id-kv-proto-aks-free-<namespace>`): this cluster only
+# federates each with its own `key-vault` service account, so the example team reads the secrets it
+# has in aks-prototype-free as the same identity. The identities, every grant on the vault and the
+# Flux webhook's token are aks-prototype-free's to make - which is why every namespace here has a
+# share there too.
 key_vault_name   = "kv-proto-aks-free"
 key_vault_create = false
 

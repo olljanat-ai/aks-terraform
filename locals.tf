@@ -74,7 +74,7 @@ locals {
     local.key_vault_enabled ? { key_vault_url = local.key_vault_uri } : {},
     {
       for namespace in local.key_vault_namespaces :
-      "key_vault_client_id_${replace(namespace, "-", "_")}" => azurerm_user_assigned_identity.key_vault[namespace].client_id
+      "key_vault_client_id_${replace(namespace, "-", "_")}" => local.key_vault_identities[namespace].client_id
     },
     # The DNS zones the listener hostnames are published in, and the identity that writes them.
     var.dns_zone_name == null ? {} : {
@@ -159,6 +159,12 @@ locals {
   # The vault-wide grants and the webhook token are made once, by the configuration that creates the
   # vault: they name the same principals and the same secret from every cluster that shares it.
   key_vault_owned = local.key_vault_enabled && var.key_vault_create
+
+  # The namespaces' identities are shared along with the vault when there is a shared resource group
+  # - see azurerm_user_assigned_identity.key_vault - and each namespace's, created here or looked up.
+  key_vault_identities_shared   = var.shared_resource_group_name != null
+  key_vault_identity_namespaces = local.key_vault_identities_shared && !local.key_vault_owned ? toset([]) : local.key_vault_namespaces
+  key_vault_identities          = merge(data.azurerm_user_assigned_identity.key_vault, azurerm_user_assigned_identity.key_vault)
 
   # The namespaces with a share of the vault: every managed namespace, and the ones the platform
   # creates itself that key_vault_namespaces names. None without a vault.

@@ -88,12 +88,21 @@ default_node_pool = {
 #   }
 # }
 
-# The `example` team. Flux deploys olljanat-ai/aks-fluxcd-example into it (see
-# olljanat-ai/aks-fluxcd-platform, tenants/example), and its apps publish themselves through the
-# shared Gateway. It keeps the default closed ingress: a NetworkPolicy from aks-fluxcd-platform lets
-# the Traefik pods in, and nothing else.
+# The `example` team. Its own Flux configuration deploys apps/ of olljanat-ai/aks-fluxcd-example
+# into it, read with the token aks-fluxcd-platform syncs from the vault as `aks-fluxcd-example-git`
+# (tenants/example), and its apps publish themselves through the shared Gateway. It keeps the
+# default closed ingress: a NetworkPolicy from aks-fluxcd-platform lets the Traefik pods in, and
+# nothing else.
 managed_namespaces = {
-  example = {}
+  example = {
+    flux = {
+      url         = "https://github.com/olljanat-ai/aks-fluxcd-example"
+      path        = "./apps"
+      secret_name = "aks-fluxcd-example-git"
+      # Read every minute, like the platform's repository.
+      sync_interval_seconds = 60
+    }
+  }
 }
 
 flux_git_repository = {

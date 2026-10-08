@@ -704,7 +704,48 @@ terraform apply -var-file=envs/prototype-free.tfvars
 
 The Flux extension already knows GitHub's SSH host keys, so no `known_hosts` is needed.
 
-Leave `flux_git_repository` unset and Flux is not installed at all.
+Leave `flux_git_repository` unset, and name no tenant repository (below), and Flux is not installed
+at all.
+
+### Tenants
+
+A managed namespace can deploy itself from a Git repository of its own - the team's - by naming it
+in `flux`. The namespace, who gets into it, its share of the Key Vault and its repository are then
+one entry in the variables file:
+
+```hcl
+managed_namespaces = {
+  example = {
+    access = [
+      { role = "namespace_user", principal_id = "00000000-0000-0000-0000-000000000000" },
+      { role = "writer", principal_id = "00000000-0000-0000-0000-000000000000" },
+    ]
+    flux = {
+      url         = "https://github.com/olljanat-ai/aks-fluxcd-example"
+      path        = "./apps"
+      secret_name = "aks-fluxcd-example-git"
+    }
+  }
+}
+```
+
+That creates a second Flux configuration, named after the namespace, **namespace-scoped** and
+installed into the namespace itself. It reconciles `path` on `branch` (default `main`) every
+`sync_interval_seconds` (default 300), retries at the same interval, prunes, and waits for what it
+applied to become ready. Because it is an Azure resource of its own rather than a Kustomization
+nested under `platform`, each team's sync status - and the error, when there is one - shows on its
+own row in the portal's GitOps view of the cluster.
+
+- The extension applies the repository as the `flux-applier` service account of that namespace and
+  refuses references across namespaces, so a team's repository changes its own namespace and
+  nothing else. There is no `targetNamespace`: the repository's `kustomization.yaml` sets
+  `namespace:` for its objects itself.
+- A private repository is read with `secret_name`, a Secret in the namespace. No credential passes
+  through Terraform or Azure: the Flux repository syncs it from the namespace's share of the Key
+  Vault (olljanat-ai/aks-fluxcd-platform, `tenants/<team>/key-vault.yaml`).
+- The rest of what a tenant needs inside the cluster - the `key-vault` service account and
+  SecretStore, the ExternalSecrets, the NetworkPolicy that lets Traefik in - stays in the Flux
+  repository, under `tenants/<team>/`.
 
 [flux]: https://learn.microsoft.com/azure/azure-arc/kubernetes/conceptual-gitops-flux2
 

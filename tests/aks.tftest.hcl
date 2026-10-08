@@ -1904,6 +1904,218 @@ run "rejects_estate_wide_defaults_azure_does_not_have" {
 }
 
 # ----------------------------------------------------------------------------------------------
+# Tenant Flux configurations
+# ----------------------------------------------------------------------------------------------
+
+run "a_namespace_deploys_nothing_unless_it_names_a_repository" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {}
+    }
+  }
+
+  assert {
+    condition     = length(azapi_resource.managed_namespace_flux_configuration) == 0
+    error_message = "A managed namespace without flux should get no Flux configuration."
+  }
+  assert {
+    condition     = length(azapi_resource.flux_extension) == 0
+    error_message = "Nothing asks for Flux, so the extension should not be installed."
+  }
+}
+
+run "a_tenant_syncs_its_own_repository_into_its_own_namespace" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        flux = {
+          url         = "https://github.com/contoso/team-payments-deploy"
+          path        = "./apps"
+          secret_name = "team-payments-deploy-git"
+        }
+      }
+      team-search = {}
+    }
+  }
+
+  assert {
+    condition     = keys(azapi_resource.managed_namespace_flux_configuration) == ["team-payments"]
+    error_message = "Only the namespace that names a repository should get a Flux configuration."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].name == "team-payments"
+    error_message = "The configuration should be named after its namespace."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].type == "Microsoft.KubernetesConfiguration/fluxConfigurations@2024-11-01"
+    error_message = "The configuration should be a Flux configuration of the same API version as the platform's."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].parent_id == module.aks.resource_id
+    error_message = "The configuration should belong to the cluster."
+  }
+  assert {
+    condition = (
+      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.scope == "namespace"
+      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.namespace == "team-payments"
+    )
+    error_message = "The configuration should be namespace-scoped, in the tenant's own namespace."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.url == "https://github.com/contoso/team-payments-deploy"
+    error_message = "The configuration should sync the tenant's repository."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.repositoryRef.branch == "main"
+    error_message = "The branch should default to main."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.localAuthRef == "team-payments-deploy-git"
+    error_message = "A private repository should be read with the Secret already in the namespace."
+  }
+  assert {
+    condition     = !contains(keys(azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties), "configurationProtectedSettings")
+    error_message = "No credential should pass through Terraform or Azure."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.path == "./apps"
+    error_message = "The Kustomization should apply the configured path."
+  }
+  assert {
+    condition = (
+      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.prune
+      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.wait
+    )
+    error_message = "The Kustomization should prune what leaves the repository and wait for what it applied."
+  }
+  assert {
+    condition = (
+      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.syncIntervalInSeconds == 300
+      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.syncIntervalInSeconds == 300
+      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.retryIntervalInSeconds == 300
+    )
+    error_message = "The repository should be read, applied and retried every five minutes by default."
+  }
+}
+
+# A tenant needs the extension, not the platform's own repository.
+run "a_tenant_alone_installs_flux" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        flux = { url = "https://github.com/contoso/team-payments-deploy" }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(azapi_resource.flux_extension) == 1
+    error_message = "A tenant's Flux configuration should install the extension it runs on."
+  }
+  assert {
+    condition     = length(azapi_resource.flux_configuration) == 0
+    error_message = "Without flux_git_repository there is no platform configuration."
+  }
+}
+
+run "a_public_tenant_repository_is_read_with_no_secret" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        flux = {
+          url                   = "https://github.com/contoso/team-payments-deploy"
+          branch                = "release"
+          sync_interval_seconds = 60
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository), "localAuthRef")
+    error_message = "A public repository should name no Secret."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.repositoryRef.branch == "release"
+    error_message = "The configured branch should be synced."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.retryIntervalInSeconds == 60
+    error_message = "A failed apply should be retried as often as the repository is read."
+  }
+}
+
+run "rejects_a_tenant_repository_url_flux_cannot_read" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        flux = { url = "github.com/contoso/team-payments-deploy" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_tenant_sync_interval_under_a_minute" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        flux = {
+          url                   = "https://github.com/contoso/team-payments-deploy"
+          sync_interval_seconds = 30
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_tenant_secret_name_kubernetes_would_refuse" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = {
+        flux = {
+          url         = "https://github.com/contoso/team-payments-deploy"
+          secret_name = "Team_Payments_Git"
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_tenant_named_after_the_platform_configuration" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      platform = {
+        flux = { url = "https://github.com/contoso/platform-deploy" }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+# ----------------------------------------------------------------------------------------------
 # Namespace-scoped access
 # ----------------------------------------------------------------------------------------------
 

@@ -115,9 +115,16 @@ jobs:
           kubectl logs -n external-dns deploy/external-dns-public --tail=40
           kubectl get kustomization -n flux-system flux-webhook -o jsonpath="{.status.conditions}"; echo
           kubectl get helmrelease -n flux-system external-dns-public -o jsonpath="{.status.conditions}"; echo
-          # The `example` tenant: its Flux objects, what runs in it and why not.
-          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -n example apps -o jsonpath="{.status.conditions}"; echo
-          kubectl get gitrepositories.source.toolkit.fluxcd.io -n example aks-fluxcd-example -o jsonpath="{.status.conditions}"; echo
+          # The `example` tenant: its Flux configuration and the objects the extension made of it,
+          # what the repository is applied as, what runs in the namespace and why not.
+          kubectl get fluxconfigs.clusterconfig.azure.com -n example example -o jsonpath="{.status}"; echo
+          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -n example -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
+          kubectl get gitrepositories.source.toolkit.fluxcd.io -n example -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
+          kubectl get rolebindings -n example -o wide
+          kubectl get clusterrolebindings -o wide | grep -E "NAME|example"
+          kubectl auth can-i --list --as=system:serviceaccount:example:flux-applier -n example
+          kubectl auth can-i create namespaces --as=system:serviceaccount:example:flux-applier
+          kubectl auth can-i create deployments -n ingress-gateway --as=system:serviceaccount:example:flux-applier
           kubectl get all,endpointslices,networkpolicy,secrets -n example -o wide
           kubectl describe pods -n example | tail -n 60
           kubectl get events -n example --sort-by=.lastTimestamp | tail -n 30

@@ -599,7 +599,8 @@ resource "azapi_resource" "maintenance_configuration" {
   schema_validation_enabled = false
 }
 
-# GitOps through Flux, for a cluster that names a repository in flux_git_repository - on either SKU.
+# GitOps through Flux, for a cluster that names a repository in flux_git_repository, or a managed
+# namespace that names one in `flux` - on either SKU.
 # The extension installs the Flux controllers into `flux-system` and keeps them on the newest minor
 # version of the stable release train; the configuration points them at the repository and
 # reconciles the one Kustomization the cluster's main configuration lives in.
@@ -607,7 +608,7 @@ resource "azapi_resource" "maintenance_configuration" {
 # The module has no input for cluster extensions, so both are written here with AzAPI, like the
 # upgrade windows and the namespaces.
 resource "azapi_resource" "flux_extension" {
-  count = local.flux_enabled ? 1 : 0
+  count = local.flux_extension_enabled ? 1 : 0
 
   name      = "flux"
   parent_id = module.aks.resource_id
@@ -654,6 +655,22 @@ resource "azapi_resource" "flux_configuration" {
   }
 
   depends_on = [azapi_resource.flux_extension]
+}
+
+# A tenant: a managed namespace that deploys itself from a repository of its own - see
+# managed_namespace_flux_configurations. One configuration per namespace, so each team's sync status
+# is a resource of its own in the portal's GitOps view rather than buried in the platform's.
+resource "azapi_resource" "managed_namespace_flux_configuration" {
+  for_each = local.managed_namespace_flux_configurations
+
+  name      = each.key
+  parent_id = module.aks.resource_id
+  type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
+  body      = each.value
+
+  # The namespace is AKS's to create, with its quota and default policies, before Flux puts anything
+  # in it.
+  depends_on = [azapi_resource.flux_extension, azapi_resource.managed_namespace]
 }
 
 # The namespaces AKS creates and keeps inside the cluster. A managed namespace is an Azure resource

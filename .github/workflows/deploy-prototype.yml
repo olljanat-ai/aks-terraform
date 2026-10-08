@@ -1,7 +1,7 @@
 name: Deploy prototype
 
 # Plans, and on request applies, one of the prototype environment's three Terraform stacks, chosen by
-# the `stack` input. Started by hand only: choose `plan` to see what would change, `apply` to change
+# the `stack` input. Started by hand (or called by another workflow): choose `plan` to see what would change, `apply` to change
 # it. An apply plans first and applies exactly that plan, so what the log shows is what was done.
 #
 #   prototype-shared   shared/ with shared/envs/prototype.tfvars: the Key Vault, the namespaces'
@@ -47,6 +47,19 @@ on:
         options: [plan, apply]
       allow_empty_state:
         description: "Continue with an empty state (a first deployment only)"
+        required: false
+        default: false
+        type: boolean
+  # The same, from another workflow - one that applies prototype-shared and then a cluster.
+  workflow_call:
+    inputs:
+      stack:
+        required: true
+        type: string
+      action:
+        required: true
+        type: string
+      allow_empty_state:
         required: false
         default: false
         type: boolean

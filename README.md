@@ -19,13 +19,14 @@ left out: name none, and AKS creates and manages one for the cluster instead, wh
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
-| `envs/prototype-free.tfvars` | Cluster on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. Its Key Vault and persistent volumes are in a [shared resource group](#shared-resource-group). |
-| `envs/prototype-free-b.tfvars` | A second cluster like prototype-free, beside it in the same network, sharing its Key Vault and shared resource group - for trying out moving workloads between clusters. |
+| `envs/prototype-a.tfvars`, `envs/prototype-b.tfvars` | The `prototype` environment's two clusters, `aks-prototype-a` and `aks-prototype-b`, on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. Side by side in one resource group and network, on the environment's [shared resources](#shared-resources), so workloads can be moved between them. |
+| `shared/` | The environment's shared resources, a root module and state of its own: the Key Vault, the identities the namespaces read it as, the DNS zones. `shared/envs/prototype.tfvars` is the `prototype` environment's. See [Shared resources](#shared-resources). |
+| `modules/conventions/` | What the two root modules have to work out the same way: region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `envs/prototype-automatic.tfvars` | Cluster on the **Automatic** SKU: Azure manages node provisioning, scaling, networking and upgrades - the virtual network included, since this cluster brings none of its own. Runs on the Standard tier, which Automatic requires, and with a public API server. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
 | `backend.hcl.example` | Template for the shared remote state backend. |
 | `docs/troubleshooting.md` | What to do when an apply fails or times out, and how to get a cluster stuck in `Creating` back under Terraform's control. |
-| `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, the manual deploy workflow for prototype-free and prototype-free-b, and the Dependabot schedule that watches the pinned module and provider versions. |
+| `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, the manual deploy workflow for the prototype environment's three stacks, and the Dependabot schedule that watches the pinned module and provider versions. |
 
 [module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
 
@@ -34,9 +35,9 @@ left out: name none, and AKS creates and manages one for the cluster instead, wh
 These must exist before running Terraform:
 
 - A **resource group** for the cluster. This one is always needed.
-- A **shared resource group** for what outlives the cluster - its Key Vault and the disks of its
-  persistent volumes - only where `shared_resource_group_name` names it. See
-  [Shared resource group](#shared-resource-group).
+- For a cluster on an environment's [shared resources](#shared-resources) - `key_vault_create =
+  false` - the environment's `shared/` stack, applied: the cluster looks its vault, identities and
+  zones up.
 - A **virtual network** in the same region, unless the cluster brings none and lets AKS create one -
   see [Clusters without a network of their own](#clusters-without-a-network-of-their-own). Where
   there is one, it needs:
@@ -58,12 +59,12 @@ These must exist before running Terraform:
   should resolve it already.
 
 `envs/prototype-automatic.tfvars` needs none of the network pieces: it names a resource group and
-nothing else about the existing estate. `envs/prototype-free.tfvars` needs all of them.
+nothing else about the existing estate. `envs/prototype-a.tfvars` and `envs/prototype-b.tfvars` need
+all of them - the zones from `shared/`.
 
-The identity running Terraform needs `Contributor` on the resource group - and on the shared one,
-where there is one - and, unless
+The identity running Terraform needs `Contributor` on the resource group and, unless
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
-private DNS zone. Linking a private zone created here (`internal_dns_zone_create`) to the network
+private DNS zone - and role definitions on the resource group, for `portable_disks_enabled`. Linking a private zone created here (`internal_dns_zone_create`) to the network
 also takes `Microsoft.Network/virtualNetworks/join/action` on it - `Network Contributor` has it.
 
 Every cluster runs the managed Gateway API CRDs, which are in **preview**. The subscription needs the
@@ -96,8 +97,17 @@ Edit the environment's variables file to name your existing resources, then appl
 az login
 terraform init
 
-terraform workspace select -or-create prototype-free
-terraform apply -var-file=envs/prototype-free.tfvars
+terraform workspace select -or-create prototype-a
+terraform apply -var-file=envs/prototype-a.tfvars
+```
+
+An environment with [shared resources](#shared-resources) applies them first, from `shared/`:
+
+```sh
+cd shared
+terraform init
+terraform workspace select -or-create prototype
+terraform apply -var-file=envs/prototype.tfvars
 ```
 
 One root module serves every environment, so **each environment needs its own state**. Locally that
@@ -109,21 +119,21 @@ backed up. Uncomment `backend "azurerm"` in `terraform.tf`, copy `backend.hcl.ex
 `backend.hcl`, and give each environment its own key:
 
 ```sh
-terraform init -backend-config=backend.hcl -backend-config="key=prototype-free.tfstate"
+terraform init -backend-config=backend.hcl -backend-config="key=prototype-a.tfstate"
 ```
 
 The backend holds a blob lease for the duration of an apply, so two people cannot write the same
 state at once. Turn on versioning and soft delete for the container too - a truncated state file is
 only recoverable if an earlier version survives.
 
-`prototype-free` can also be deployed from GitHub: the [Deploy prototype-free](.github/workflows/deploy-prototype-free.yml)
-workflow, started by hand, plans with `envs/prototype-free.tfvars` and - when run with `apply` -
-applies that plan. Its `environment` input deploys `prototype-free-b` the same way, from the GitHub
-environment of that name and the state `prototype-free-b.tfstate` unless that environment sets a
-`TF_STATE_KEY` of its own. It uses the service principal of the `AZURE_*` variables and the
-`AZURE_CLIENT_SECRET` secret, and finds the state through the variables `TF_STATE_RESOURCE_GROUP`,
-`TF_STATE_STORAGE_ACCOUNT` and, optionally, `TF_STATE_KEY`. It refuses to plan against an empty state
-unless told it is a first deployment.
+The `prototype` environment can also be deployed from GitHub: the
+[Deploy prototype](.github/workflows/deploy-prototype.yml) workflow, started by hand, plans one of
+its three stacks - `prototype-shared` (`shared/`), `prototype-a` or `prototype-b` - and, when run
+with `apply`, applies that plan. Each stack has its state as `<stack>.tfstate`. It runs in the
+`prototype` GitHub environment, uses the service principal of the `AZURE_*` variables and the
+`AZURE_CLIENT_SECRET` secret, and finds the state through the variables `TF_STATE_RESOURCE_GROUP`
+and `TF_STATE_STORAGE_ACCOUNT`. It refuses to plan against an empty state unless told it is a first
+deployment.
 
 The configuration can be checked without an Azure subscription at all, which is exactly what CI
 runs on every pull request:
@@ -567,7 +577,8 @@ deploys, each acting as an identity created here:
   [Renew Certificate](.github/workflows/renew-certificate.yml) workflow: Let's Encrypt, with the
   DNS-01 challenge solved in the environment's `dns_zone_name` - the private zone's names too, since
   their `_acme-challenge` records go in the public zone above it - imported into its
-  `key_vault_name`, both read from `envs/<environment>.tfvars`. It runs monthly for `prototype-free`,
+  `key_vault_name`, both read from the variables file that creates them - `shared/envs/prototype.tfvars`
+  for `prototype`, `envs/<environment>.tfvars` for any other. It runs monthly for `prototype`,
   and whenever the workflow changes on `main`, and renews when fewer than 30 days are left; run it
   by hand for another environment, other domains or the staging CA. It needs the variables `AZURE_CLIENT_ID`,
   `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` and `LETSENCRYPT_EMAIL` and the secret
@@ -578,8 +589,7 @@ deploys, each acting as an identity created here:
 - **DNS**: with `dns_zone_name` set, `<cluster identity>-dns` is federated with
   `external-dns/external-dns` and granted `DNS Zone Contributor` on the zone. external-dns keeps an A
   record per listener hostname, pointing at the Gateway's internal load balancer IP. The zone is
-  looked up in `shared_resource_group_name` - or `resource_group_name` without one - unless
-  `dns_zone_resource_group_name` says otherwise - or, with
+  looked up in `resource_group_name` unless `dns_zone_resource_group_name` says otherwise - or, with
   `dns_zone_create = true`, created there. A created zone answers nothing until the domain's
   registrar delegates to it: set the domain's NS records to the `dns_zone_name_servers` output
   (`terraform output dns_zone_name_servers`). **The zone answers with a private address**: a public zone then tells anyone who asks
@@ -589,21 +599,19 @@ deploys, each acting as an identity created here:
   writes public or private zones, never both - and granted `Private DNS Zone Contributor` on that
   Azure Private DNS zone. It keeps the same A records for the listener hostnames in that zone, and
   they resolve only in the networks the zone is linked to. The zone is looked up in
-  `shared_resource_group_name` - or `resource_group_name` without one - unless
-  `internal_dns_zone_resource_group_name` says otherwise - or, with
+  `resource_group_name` unless `internal_dns_zone_resource_group_name` says otherwise - or, with
   `internal_dns_zone_create = true`, created there and linked to the cluster's virtual network
   (which takes one: a cluster on the network AKS manages has nothing to link it to, and Terraform
-  warns). In `prototype-free` the zone is `internal.onek8s.lol`, a subdomain of the public zone:
+  warns). In `prototype` the zone is `internal.onek8s.lol`, a subdomain of the public zone:
   inside the network it is answered by the private zone, outside by nothing. The wildcard certificate
   covers its hostnames as well.
 
 ## Key Vault
 
-`key_vault_name` creates one Key Vault for the cluster, in `shared_resource_group_name` - or in
-`resource_group_name` without one - on the Azure RBAC permission model. With `key_vault_create =
-false` it is not created but looked up, for a cluster sharing another's vault: see
-[Shared resource group](#shared-resource-group). Every namespace keeps its secrets in it, and reads
-only its own: the namespaces are kept apart by the names of the secrets, with
+`key_vault_name` creates one Key Vault for the cluster, in `resource_group_name`, on the Azure RBAC
+permission model - or, with `key_vault_create = false`, looks up the environment's shared one, which
+`shared/` creates with the same shares and grants: see [Shared resources](#shared-resources). Every
+namespace keeps its secrets in it, and reads only its own: the namespaces are kept apart by the names of the secrets, with
 [Azure ABAC conditions][kvabac] on the role assignments.
 
 **A namespace owns the secrets named `<namespace>--<name>`** - `example--api-key`,
@@ -612,7 +620,7 @@ in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (list
 
 | Who | Role on the vault | Condition |
 | --- | --- | --- |
-| The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` - or `id-<key_vault_name>-<namespace>`, shared between clusters, with a [shared resource group](#shared-resource-group) | `Key Vault Secrets User` | Reads the value of a secret only if it is the namespace's own |
+| The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` - or, on the shared vault, as the environment's `id-<region>-<environment>-shared-kv-<namespace>` | `Key Vault Secrets User` | Reads the value of a secret only if it is the namespace's own |
 | The namespace's `writer` and `admin` grants in `managed_namespaces` | `Key Vault Secrets Officer` | Creates, changes, deletes, backs up, restores, recovers and purges the namespace's own secrets only |
 | `entra_admin_group_object_ids` | `Key Vault Administrator` | None: the whole vault, certificates included |
 
@@ -643,83 +651,53 @@ az keyvault secret set --vault-name <key_vault_name> --name example--api-key --v
 
 [kvabac]: https://learn.microsoft.com/azure/key-vault/general/rbac-abac
 
-## Shared resource group
+## Shared resources
 
-`shared_resource_group_name` names an existing resource group for **what outlives the cluster**:
-the Key Vault, the identities the namespaces read it as, the DNS zones the hostnames are published
-in, and the disks of persistent volumes. Everything else stays per cluster - the cluster, and the
-node resource group AKS creates for it and deletes with it. Two clusters that name the same group can
-hand workloads to each other, which is how a cluster is replaced
-rather than upgraded in place: build the next one beside it, move the workloads over, and retire it.
+An environment can run more than one cluster on the same **shared resources**, so that a workload can
+move from one cluster to another - which is how a cluster is replaced rather than upgraded in place:
+build the next one beside it, move the workloads over, destroy the old one. `prototype` does this
+with two clusters, `aks-prototype-a` and `aks-prototype-b`, and everything - both clusters and what
+they share - is in one resource group, `rg-aks-prototype`.
 
-| | In the shared group | |
+The shared resources are a Terraform stack of their own, [`shared/`](shared/), with a state of its
+own. Neither cluster's configuration creates them, so either cluster can be destroyed and built again
+while they stay. `shared/` is applied first; the clusters look its resources up by name.
+
+| | Shared - `shared/envs/prototype.tfvars` | Per cluster - `envs/prototype-a.tfvars`, `envs/prototype-b.tfvars` |
 | --- | --- | --- |
-| Key Vault | Created by the cluster with `key_vault_create = true` (the default), looked up by every other with `key_vault_create = false` | Every grant on it - `Key Vault Administrator` for the admin groups, `Key Vault Secrets Officer` for the namespaces' writers, the namespaces' own read access - and the Flux webhook's token are made once, by the cluster that creates the vault. |
-| Namespace identities | `id-<key_vault_name>-<namespace>`, created with the vault and looked up by every other cluster | One identity per namespace, not per cluster: each cluster adds a federated credential of its own (`aks-<cluster name>`) to it, for its namespace's `key-vault` service account. A namespace is the same principal, with the same client ID and the same grants, wherever it runs - including anything granted to it outside this repository. Azure allows 20 credentials on an identity, so 20 clusters at once. A namespace with a share in a cluster that looks the vault up needs one in the configuration that creates it, or its identity is not there to find. |
-| DNS zones | Created by the cluster with `dns_zone_create` and `internal_dns_zone_create`, looked up by every other - unless `dns_zone_resource_group_name` or `internal_dns_zone_resource_group_name` puts them elsewhere | Every cluster's external-dns publishes its own hostnames in the same zones, and owns its records under its own name (`txtOwnerId`), so it never touches another cluster's. A hostname moves with its workload: the old cluster's external-dns deletes the record, and the new one's publishes it. The private zone is linked to the network by the cluster that creates it; clusters in the same network resolve it through that link. |
-| Disks | Created by the Azure Disk CSI driver, for the platform's `portable-disk` StorageClass | The cluster identity holds `Contributor` on the group, which the driver needs to create, attach and delete a disk outside the node resource group. The group's name reaches the Flux repository as `shared_resource_group_name`. The StorageClass keeps a disk when its claim is deleted (`Retain`), and is zone-redundant, so a disk attaches to a node in any zone. |
+| Key Vault | `kv-sec-prototype-shared`, with every grant on it - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false` |
+| What a namespace reads the vault as | `id-sec-prototype-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
+| DNS zones | `onek8s.lol` and `internal.onek8s.lol`, the private one linked to the network | Looked up: `dns_zone_name` and `internal_dns_zone_name`, without `*_create`. external-dns runs as `id-sec-prototype-aks-<a\|b>-dns`, granted on both zones, and owns its own records in them (`txtOwnerId`) |
+| Disks of persistent volumes | Created in `rg-aks-prototype` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-prototype-<a\|b>)` on the group, for disks and snapshots only |
+| The cluster | | `aks-prototype-<a\|b>`, run by `id-sec-prototype-aks-<a\|b>`; its node resource group, which AKS deletes with it |
 
-The cluster's own identity and external-dns's stay per cluster, in `resource_group_name`. They act
-for the cluster rather than for a workload - the network, the DNS records the cluster owns - so
-there is nothing for them to carry over to the next one.
+The names say which is which: a shared resource carries `shared` - or, for the zones, the
+environment's domain - and a cluster's carries the cluster's name. The shared identities' names are
+worked out the same way by both stacks, in [`modules/conventions`](modules/conventions/), which also
+holds the region codes and the ABAC conditions that draw each namespace's share of the vault.
 
-`Contributor` on the group is management plane access to the vault too. It reads no secret - the
-vault authorizes data through Azure RBAC alone - but it could delete the vault, which soft delete
-keeps recoverable for 90 days.
+- **A namespace is the same identity in every cluster.** Its client ID and its grants - including
+  anything granted to it outside this repository - follow it to the next cluster. Azure allows 20
+  federated credentials on an identity, so 20 clusters at once.
+- **Every namespace with a share of the vault in a cluster has to be listed in `shared/`'s
+  `key_vault_namespaces`**, or its identity is not there to look up and the cluster's plan fails.
+  The namespaces' writers are listed there too, rather than taken from the clusters' namespace
+  grants.
+- **Disks outlive the cluster.** The Azure Disk CSI driver needs a grant outside the node resource
+  group to create a disk there, which Microsoft documents as `Contributor`. In a group holding the
+  other cluster too, that would let one cluster change the other, so each cluster gets a role of its
+  own instead: `Microsoft.Compute/disks/*`, `Microsoft.Compute/snapshots/*` and reading the group.
+  Attaching a disk is a write on the node's VM, which AKS has granted already.
+- **Hostnames are each cluster's**, in the shared zones: the clusters publish under names of their
+  own, so they never contend for a record.
 
-`prototype-free` and `prototype-free-b` share `rg-aks-prototype-shared`: `prototype-free` creates the
-vault, the identities and the zones, `prototype-free-b` looks them up. Moving a workload between them - its secrets, its volumes, its
-hostnames - is described in aks-fluxcd-platform's README, "Moving a workload to another cluster".
+Moving a workload between the clusters - its secrets, its volumes, its hostnames - is described in
+aks-fluxcd-platform's README, "Moving a workload to another cluster".
 
-### Moving existing resources into the shared group
-
-A resource group is part of a resource's ID, so Terraform would **replace** a vault or a zone that
-moves to the shared group. A vault destroyed here is purged, every secret in it with it; a public
-zone created again gets new name servers, and the domain's delegation points at nothing until the
-registrar is changed. Move them in Azure instead, and tell Terraform where they went, before the
-first apply that names `shared_resource_group_name`. For `prototype-free`:
-
-```sh
-src=rg-aks-prototype
-dst=rg-aks-prototype-shared
-vault="$(az keyvault show --name kv-proto-aks-free --query id -o tsv)"
-zone="$(az network dns zone show -g "$src" -n onek8s.lol --query id -o tsv)"
-internal="$(az network private-dns zone show -g "$src" -n internal.onek8s.lol --query id -o tsv)"
-
-# One move: the zones take their records along, and the private zone its network link.
-az resource move --destination-group "$dst" --ids "$vault" "$zone" "$internal"
-
-for address in 'azurerm_key_vault.this[0]' 'azurerm_dns_zone.this[0]' \
-  'azurerm_private_dns_zone.internal[0]' 'azurerm_private_dns_zone_virtual_network_link.internal[0]'; do
-  terraform state rm "$address"
-done
-sub="$(az account show --query id -o tsv)"
-terraform import -var-file=envs/prototype-free.tfvars 'azurerm_key_vault.this[0]' \
-  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.KeyVault/vaults/kv-proto-aks-free"
-terraform import -var-file=envs/prototype-free.tfvars 'azurerm_dns_zone.this[0]' \
-  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.Network/dnsZones/onek8s.lol"
-terraform import -var-file=envs/prototype-free.tfvars 'azurerm_private_dns_zone.internal[0]' \
-  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.Network/privateDnsZones/internal.onek8s.lol"
-terraform import -var-file=envs/prototype-free.tfvars 'azurerm_private_dns_zone_virtual_network_link.internal[0]' \
-  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.Network/privateDnsZones/internal.onek8s.lol/virtualNetworkLinks/aks-prototype-free"
-```
-
-Role assignments do not move with a resource. The next plan creates them again - on the vault, the
-namespaces' readers, the writers and the admin groups; on the zones, external-dns's - and adds the
-grant on the shared group; it should neither create nor destroy the vault, a zone or the link. The
-name servers of the public zone stay as they were, so the domain's delegation needs no change.
-external-dns is told the zones' new resource group through Flux, and catches up on its next sync. Should it replace the Flux webhook's
-token, `azurerm_key_vault_secret.flux_github_webhook[0]`, remove and import that the same way, by its
-`https://kv-proto-aks-free.vault.azure.net/secrets/flux-system--github-webhook-token/<version>` ID.
-The commands run against the environment's remote state, from a shell with the backend configured
-as the deploy workflow configures it.
-
-The namespaces' identities are not moved: they are **replaced** by shared ones named after the
-vault. Azure does not move a user assigned identity between resource groups, and the name changes
-anyway. The same apply creates the new identities, their credentials and grants, and hands Flux their
-client IDs; the old ones are destroyed. Secrets already synced into the cluster stay, and External
-Secrets reads as the new identities once the grants have propagated - a few minutes at most. Anything
-granted to the old identities outside this repository has to be granted to the new ones.
+A cluster that is alone in its environment keeps a vault of its own instead - `key_vault_create`
+defaults to true - with its namespaces' identities named after it
+(`<cluster identity>-kv-<namespace>`) and every grant made by its own configuration, as
+`prototype-automatic` and `prototype-prd-economy` would.
 
 [agcaddon]: https://learn.microsoft.com/azure/application-gateway/for-containers/quickstart-deploy-application-gateway-for-containers-alb-controller-addon
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
@@ -742,8 +720,8 @@ flux_git_repository = {
 
 That installs the Flux cluster extension (`microsoft.flux`) into `flux-system`, kept on the newest
 minor version of the `Stable` release train, and creates a Flux configuration named `platform` that
-reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300; `prototype-free`
-reads every 60) and retries a failed run at the same interval. Flux prunes what is removed from the
+reconciles the Kustomization at `path` every `sync_interval_seconds` (default 300; the `prototype`
+clusters read every 60) and retries a failed run at the same interval. Flux prunes what is removed from the
 repository. `platform` runs no health checks of its own (`wait = false`): it applies what `path`
 holds - in practice the cluster's own Flux Kustomizations, each waiting for its objects - and is
 done, so a commit is never held back behind one of them that is unhealthy.
@@ -753,7 +731,8 @@ token is generated and kept in the vault as `flux-system--github-webhook-token`,
 share of the vault to read it with (`key_vault_client_id_flux_system`), and the Flux repository
 publishes a GitHub webhook receiver that checks deliveries against it. The repository's webhook in
 GitHub is then set once, with that token as its secret - olljanat-ai/aks-fluxcd-platform's README,
-"Webhook", has the URL. `prototype-free` turns it on.
+"Webhook", has the URL. The `prototype` clusters turn it on; their token is `shared/`'s, so
+both read the same one.
 
 The `platform` Kustomization is also given the Azure facts the repository cannot know on its own, as
 Flux [post-build variables][postbuild], so they are never copied into it by hand:
@@ -788,7 +767,7 @@ next apply. Keep it out of the variables file and pass it from a secret store in
 export TF_VAR_flux_git_credentials='{ https_key = "github_pat_..." }'
 # or
 export TF_VAR_flux_git_credentials="{ ssh_private_key = $(jq -Rs . < deploy_key) }"
-terraform apply -var-file=envs/prototype-free.tfvars
+terraform apply -var-file=envs/prototype-a.tfvars
 ```
 
 The Flux extension already knows GitHub's SSH host keys, so no `known_hosts` is needed.
@@ -864,7 +843,7 @@ its own answers, so the two SKUs behave differently even though they share one s
 
 `envs/prototype-automatic.tfvars` runs this SKU **without an existing network**, so most of what
 follows does not apply to it - it is what an Automatic cluster needs when you do attach it to one,
-which `prototype-free` does and which this environment may go back to. Skip to
+which `prototype-a` does and which this environment may go back to. Skip to
 [Clusters without a network of their own](#clusters-without-a-network-of-their-own) for the
 arrangement it is actually on.
 
@@ -984,7 +963,7 @@ assigned identity and the grant with it.
 
 **`envs/prototype-automatic.tfvars` is on this arrangement.** Attaching an Automatic cluster to the
 existing network is what has been failing here - the bring-your-own subnets and the API server
-injected into a delegated one - while `prototype-free` builds in that same network without trouble,
+injected into a delegated one - while `prototype-a` builds in that same network without trouble,
 so the network is taken out of the picture rather than tuned around. The support for the other
 arrangement is entirely intact: name the network and its subnets again to go back to it, and the
 variables file lists the lines to put back.
@@ -1041,7 +1020,7 @@ flag is `false` is **refused** rather than ignored, so an environment cannot hal
 **`envs/prototype-automatic.tfvars` ships with the integration off** and states it with that flag,
 even though the cluster brings no network for it to use either way - so that naming a subnet is
 refused rather than quietly ignored if the network is ever named again. Injecting the API server
-into a delegated subnet is part of what has been failing there; `prototype-free` builds in the
+into a delegated subnet is part of what has been failing there; `prototype-a` builds in the
 existing network without any of it.
 
 Microsoft documents the delegated subnet as **required** for an AKS Automatic cluster in an existing
@@ -1103,7 +1082,7 @@ choice for a throwaway cluster and a poor one for anything else.
   cluster is created, which a system assigned identity cannot be: it does not exist until the cluster
   does. Its name is **worked out, not configured**: `id-<region code>-<environment>-<function>`,
   built from the cluster name and the region. A cluster name reads `<what it is>-<environment>-<which
-  one>`, so `aks-prototype-free` in `swedencentral` is run by `id-sec-prototype-aks-free`. The region
+  one>`, so `aks-prototype-a` in `swedencentral` is run by `id-sec-prototype-aks-a`. The region
   codes are the estate's own convention rather than anything Azure defines, so they live in
   `local.location_codes` in `locals.tf`; a region that is not listed there stops the plan rather than
   being given a guessed code. An identity cannot be renamed in place, so a name that changes replaces

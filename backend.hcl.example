@@ -1,6 +1,6 @@
 # Shared remote state. Copy to backend.hcl, fill in your own storage account, and initialize with:
 #
-#   terraform init -backend-config=backend.hcl -backend-config="key=prototype-free.tfstate"
+#   terraform init -backend-config=backend.hcl -backend-config="key=prototype-a.tfstate"
 #
 # The key is deliberately left out of this file: one root module serves every environment, so each
 # environment needs a state file of its own and passing the key per init is what keeps them apart.

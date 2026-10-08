@@ -1,21 +1,26 @@
-# One Key Vault for the whole cluster, and every namespace's secrets in it. What keeps the namespaces
-# apart is not the vault but the names of the secrets in it: a namespace owns the secrets whose names
-# start with `<namespace>--`, and every grant on the vault made here carries an Azure ABAC condition
-# holding it to that prefix. See the README, "Key Vault".
+# The Key Vault the cluster's namespaces keep their secrets in, and what each namespace reads it as.
+# What keeps the namespaces apart is not the vault but the names of the secrets in it: a namespace
+# owns the secrets whose names start with `<namespace>--`, and every grant on the vault carries an
+# Azure ABAC condition holding it to that prefix. See the README, "Key Vault".
 #
-# The vault sits in the shared resource group when there is one, so that it outlives the cluster and
-# can be shared with the next: a second cluster sets key_vault_create = false and looks it up by
-# name, and its namespaces read the very secrets they read before. See the README, "Shared resource
-# group".
+# The vault is one of two:
 #
-# Created only for a cluster that names it. The vault is on the Azure RBAC permission model - access
-# policies know no conditions - and reached over its public endpoint, authenticated with Entra ID.
+#   - The cluster's own (key_vault_create = true), created here with everything on it: the
+#     namespaces' identities, every grant, the Flux webhook's token. It goes with the cluster.
+#   - The environment's shared one (key_vault_create = false), created with its namespaces'
+#     identities and grants by shared/, and only looked up here. The cluster adds a federated
+#     credential of its own to each identity and nothing else, so it can be destroyed and built again
+#     - or replaced by the next cluster - while the secrets and the identities stay. See the README,
+#     "Shared resources".
+#
+# The vault is on the Azure RBAC permission model - access policies know no conditions - and reached
+# over its public endpoint, authenticated with Entra ID.
 resource "azurerm_key_vault" "this" {
   count = local.key_vault_owned ? 1 : 0
 
   location                   = var.location
   name                       = var.key_vault_name
-  resource_group_name        = local.key_vault_resource_group_name
+  resource_group_name        = var.resource_group_name
   sku_name                   = "standard"
   tenant_id                  = data.azurerm_client_config.current.tenant_id
   rbac_authorization_enabled = true
@@ -25,10 +30,10 @@ resource "azurerm_key_vault" "this" {
 }
 
 data "azurerm_key_vault" "this" {
-  count = local.key_vault_enabled && !var.key_vault_create ? 1 : 0
+  count = local.key_vault_shared ? 1 : 0
 
   name                = var.key_vault_name
-  resource_group_name = local.key_vault_resource_group_name
+  resource_group_name = var.resource_group_name
 }
 
 # The identity each namespace reads its own secrets as, federated with the `key-vault` service account
@@ -36,33 +41,29 @@ data "azurerm_key_vault" "this" {
 # namespace names that service account, and the operator requests a token for it on every read - so a
 # namespace's store can read that namespace's secrets and no others.
 #
-# With a shared resource group the identities are shared too: one per namespace, in the shared
-# group, named after the vault rather than the cluster - created by the configuration that creates
-# the vault, and looked up by every other. Each cluster federates the identity with its own service
-# account (azurerm_federated_identity_credential.key_vault), so a namespace is the same principal,
-# with the same client ID and the same grants, in every cluster that shares the vault. Without one,
-# every cluster has identities of its own, in its own resource group.
+# Beside the cluster's own vault, the cluster's own identities: `<cluster identity>-kv-<namespace>`.
 resource "azurerm_user_assigned_identity" "key_vault" {
-  for_each = local.key_vault_identity_namespaces
+  for_each = local.key_vault_owned ? local.key_vault_namespaces : toset([])
 
   location            = var.location
-  name                = local.key_vault_identities_shared ? "id-${var.key_vault_name}-${each.key}" : "${local.managed_identity_name}-kv-${each.key}"
-  resource_group_name = local.key_vault_identities_shared ? var.shared_resource_group_name : var.resource_group_name
+  name                = "${local.managed_identity_name}-kv-${each.key}"
+  resource_group_name = var.resource_group_name
 }
 
-# The shared identities of a cluster that shares another's vault. A namespace has to have been given
-# a share by the configuration that creates the vault - in its managed_namespaces or
-# key_vault_namespaces - for its identity to be there to find.
+# Beside the shared vault, the environment's shared identities -
+# `id-<region>-<environment>-shared-kv-<namespace>`, see modules/conventions - so a namespace is the
+# same principal, with the same client ID and the same grants, in every cluster of the environment. A
+# namespace with a share here has to have one in shared/ too, or its identity is not there to find.
 data "azurerm_user_assigned_identity" "key_vault" {
-  for_each = local.key_vault_identities_shared && !local.key_vault_owned ? local.key_vault_namespaces : toset([])
+  for_each = local.key_vault_shared ? local.key_vault_namespaces : toset([])
 
-  name                = "id-${var.key_vault_name}-${each.key}"
-  resource_group_name = var.shared_resource_group_name
+  name                = module.conventions.shared_key_vault_identity_names[each.key]
+  resource_group_name = var.resource_group_name
 }
 
-# One credential per cluster on each identity, named after the cluster: Azure allows 20 on an
-# identity, so up to 20 clusters can share a namespace's identity at once. Each is destroyed with its
-# cluster's configuration, and the identity stays for the rest.
+# The cluster's credential on each identity, named after the cluster. A shared identity carries one per
+# cluster of the environment - Azure allows 20 - and each is destroyed with its cluster, leaving the
+# identity to the rest.
 resource "azurerm_federated_identity_credential" "key_vault" {
   for_each = local.key_vault_namespaces
 
@@ -89,10 +90,9 @@ resource "azurerm_federated_identity_credential" "key_vault" {
 # refuses the list outright. A certificate's private key is the secret behind it, under the same name,
 # so a certificate is read the same way.
 #
-# Granted with the identity: a shared identity is granted once, by the configuration that creates
-# it, and every cluster federated with it reads with that one grant.
+# Made for the cluster's own identities only: shared/ grants the shared ones.
 resource "azurerm_role_assignment" "key_vault_namespace_reader" {
-  for_each = var.create_role_assignments ? local.key_vault_identity_namespaces : toset([])
+  for_each = var.create_role_assignments && local.key_vault_owned ? local.key_vault_namespaces : toset([])
 
   principal_id         = azurerm_user_assigned_identity.key_vault[each.key].principal_id
   scope                = local.key_vault_id
@@ -105,8 +105,8 @@ resource "azurerm_role_assignment" "key_vault_namespace_reader" {
 # The people and pipelines who may write in a namespace - its `writer` and `admin` grants in
 # managed_namespaces - manage its secrets in the vault too, and only its secrets: they can create,
 # change, delete and recover the ones under the namespace's prefix. They work with secrets only; a
-# certificate is imported by someone holding Key Vault Administrator. Made by the configuration that
-# creates the vault, not by every cluster that shares it.
+# certificate is imported by someone holding Key Vault Administrator. On the cluster's own vault only:
+# shared/ grants the shared one's writers.
 resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   for_each = local.key_vault_writer_role_assignments
 
@@ -119,8 +119,8 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
 }
 
 # The cluster's admin groups run the whole vault: the platform's secrets and certificates - the
-# listener certificates in ingress-gateway - are put there by them. Likewise made once, where the
-# vault is created.
+# listener certificates in ingress-gateway - are put there by them. On the cluster's own vault only,
+# like the writers.
 resource "azurerm_role_assignment" "key_vault_admin" {
   for_each = toset(var.create_role_assignments && local.key_vault_owned ? var.entra_admin_group_object_ids : [])
 
@@ -134,8 +134,8 @@ resource "azurerm_role_assignment" "key_vault_admin" {
 # generated here, kept in flux-system's share of the vault, and set by hand as the secret of the
 # repository's webhook (see the README, "Flux"). The vault, not this state, is where it is read from.
 #
-# Generated by the configuration that creates the vault. A cluster sharing it reads the same token,
-# so its Receiver answers on the same path and the repository's webhook can be moved to it as is.
+# In the cluster's own vault only. The shared vault's is shared/'s, and every cluster of the
+# environment reads the same token - so each Receiver answers on the same path.
 resource "random_password" "flux_github_webhook" {
   count = local.flux_github_webhook_enabled && local.key_vault_owned ? 1 : 0
 

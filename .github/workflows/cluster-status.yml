@@ -1,6 +1,7 @@
 name: Cluster status
 
-# Reports, read-only, what the prototype-free cluster is doing - for when something Flux deploys does
+# Reports, read-only, what a prototype cluster - aks-prototype-a or aks-prototype-b, chosen by the
+# `cluster` input - is doing, for when something Flux deploys does
 # not come up and nobody at hand has a kubeconfig. Started by hand. It changes nothing.
 #
 #   - the cluster's Kubernetes version and its managed Gateway API CRD bundle;
@@ -11,12 +12,19 @@ name: Cluster status
 #     needs the principal to hold a Kubernetes RBAC role on the cluster (Azure Kubernetes Service RBAC
 #     Reader at least); without one it is reported as forbidden and the rest still runs.
 #
-# Credentials: the same service principal and GitHub environment as Deploy prototype-free.
+# Credentials: the same service principal and GitHub environment as Deploy prototype.
 #
 # Besides by hand, it runs on a pull request that changes this file - so a change to what it reports
 # shows its own result.
 on:
   workflow_dispatch:
+    inputs:
+      cluster:
+        description: "The cluster to report on"
+        required: true
+        default: "aks-prototype-a"
+        type: choice
+        options: [aks-prototype-a, aks-prototype-b]
   pull_request:
     paths:
       - .github/workflows/cluster-status.yml
@@ -26,14 +34,13 @@ permissions:
 
 jobs:
   status:
-    name: status prototype-free
+    name: status ${{ inputs.cluster || 'aks-prototype-a' }}
     runs-on: ubuntu-latest
-    environment: prototype-free
+    environment: prototype
     env:
+      # The clusters and their shared resources - the zones among them - are all in one group.
       RESOURCE_GROUP: rg-aks-prototype
-      # The zones are in the shared resource group, with the Key Vault (envs/prototype-free.tfvars).
-      DNS_RESOURCE_GROUP: rg-aks-prototype-shared
-      CLUSTER: aks-prototype-free
+      CLUSTER: ${{ inputs.cluster || 'aks-prototype-a' }}
       DNS_ZONE: onek8s.lol
       INTERNAL_DNS_ZONE: internal.onek8s.lol
     steps:
@@ -65,9 +72,9 @@ jobs:
         continue-on-error: true
         run: |
           echo "== $DNS_ZONE"
-          az network dns record-set list -g "$DNS_RESOURCE_GROUP" -z "$DNS_ZONE" --query '[].{name: name, type: type, a: ARecords, txt: TXTRecords}' --output json
+          az network dns record-set list -g "$RESOURCE_GROUP" -z "$DNS_ZONE" --query '[].{name: name, type: type, a: ARecords, txt: TXTRecords}' --output json
           echo "== $INTERNAL_DNS_ZONE"
-          az network private-dns record-set list -g "$DNS_RESOURCE_GROUP" -z "$INTERNAL_DNS_ZONE" --query '[].{name: name, type: type, a: aRecords, txt: txtRecords}' --output json
+          az network private-dns record-set list -g "$RESOURCE_GROUP" -z "$INTERNAL_DNS_ZONE" --query '[].{name: name, type: type, a: aRecords, txt: txtRecords}' --output json
 
       - name: Inside the cluster
         continue-on-error: true

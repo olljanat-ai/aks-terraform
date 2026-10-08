@@ -88,9 +88,9 @@ locals {
       internal_dns_zone_subscription_id     = split("/", local.internal_dns_zone_id)[2]
     },
     local.external_dns_enabled ? { dns_identity_client_id = azurerm_user_assigned_identity.external_dns[0].client_id } : {},
-    # Where the disks of persistent volumes go, so that they outlive the cluster - see
-    # shared_resource_group_name.
-    var.shared_resource_group_name == null ? {} : { shared_resource_group_name = var.shared_resource_group_name },
+    # Where the disks of the `portable-disk` StorageClass go, so that they outlive the cluster - see
+    # portable_disks_enabled.
+    var.portable_disks_enabled ? { portable_disk_resource_group_name = var.resource_group_name } : {},
   )
 
   # The Flux configuration as sent to Azure, apart from the credential: a local rather than written
@@ -138,36 +138,27 @@ locals {
   external_dns_internal_service_account = "system:serviceaccount:external-dns:external-dns-internal"
 
   # The public DNS zone, whether looked up or created here. Null when no zone is named.
-  #
-  # A zone is shared between the clusters on a shared resource group, like the vault: each publishes
-  # its own hostnames in it, and the records of a workload's hostnames follow the workload.
-  dns_zone_resource_group_name = coalesce(var.dns_zone_resource_group_name, var.shared_resource_group_name, var.resource_group_name)
+  dns_zone_resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
   dns_zone_id                  = one(concat(data.azurerm_dns_zone.this[*].id, azurerm_dns_zone.this[*].id))
 
   # The private zone, likewise. Null when no zone is named.
-  internal_dns_zone_resource_group_name = coalesce(var.internal_dns_zone_resource_group_name, var.shared_resource_group_name, var.resource_group_name)
+  internal_dns_zone_resource_group_name = coalesce(var.internal_dns_zone_resource_group_name, var.resource_group_name)
   internal_dns_zone_id                  = one(concat(data.azurerm_private_dns_zone.internal[*].id, azurerm_private_dns_zone.internal[*].id))
 
   # external-dns, and the identity it writes as, are there for either zone.
   external_dns_enabled = var.dns_zone_name != null || var.internal_dns_zone_name != null
 
-  # The Key Vault is there for a cluster that names one: created here, or another cluster's looked up
-  # - see key_vault_create. It lives with whatever else outlives the cluster when there is a shared
-  # resource group, and in the cluster's own otherwise.
-  key_vault_enabled             = var.key_vault_name != null
-  key_vault_resource_group_name = coalesce(var.shared_resource_group_name, var.resource_group_name)
-  key_vault_id                  = one(concat(data.azurerm_key_vault.this[*].id, azurerm_key_vault.this[*].id))
-  key_vault_uri                 = one(concat(data.azurerm_key_vault.this[*].vault_uri, azurerm_key_vault.this[*].vault_uri))
+  # The Key Vault is there for a cluster that names one: its own, created here, or the environment's
+  # shared one, created by shared/ and looked up - see key_vault_create.
+  key_vault_enabled = var.key_vault_name != null
+  key_vault_owned   = local.key_vault_enabled && var.key_vault_create
+  key_vault_shared  = local.key_vault_enabled && !var.key_vault_create
+  key_vault_id      = one(concat(data.azurerm_key_vault.this[*].id, azurerm_key_vault.this[*].id))
+  key_vault_uri     = one(concat(data.azurerm_key_vault.this[*].vault_uri, azurerm_key_vault.this[*].vault_uri))
 
-  # The vault-wide grants and the webhook token are made once, by the configuration that creates the
-  # vault: they name the same principals and the same secret from every cluster that shares it.
-  key_vault_owned = local.key_vault_enabled && var.key_vault_create
-
-  # The namespaces' identities are shared along with the vault when there is a shared resource group
-  # - see azurerm_user_assigned_identity.key_vault - and each namespace's, created here or looked up.
-  key_vault_identities_shared   = var.shared_resource_group_name != null
-  key_vault_identity_namespaces = local.key_vault_identities_shared && !local.key_vault_owned ? toset([]) : local.key_vault_namespaces
-  key_vault_identities          = merge(data.azurerm_user_assigned_identity.key_vault, azurerm_user_assigned_identity.key_vault)
+  # The identity each namespace reads the vault as: the cluster's own beside its own vault, the
+  # environment's shared one beside the shared vault - see key_vault.tf.
+  key_vault_identities = merge(data.azurerm_user_assigned_identity.key_vault, azurerm_user_assigned_identity.key_vault)
 
   # The namespaces with a share of the vault: every managed namespace, and the ones the platform
   # creates itself that key_vault_namespaces names. None without a vault.
@@ -176,68 +167,10 @@ locals {
   # The Flux GitHub webhook's token lives in the vault, for the Receiver in flux-system to read.
   flux_github_webhook_enabled = var.flux_github_webhook && local.flux_enabled && local.key_vault_enabled
 
-  # The share of each: the secrets whose names start with this. Key Vault names are case-insensitive
-  # and compared in lowercase, which a namespace name already is.
-  key_vault_secret_prefixes = { for namespace in local.key_vault_namespaces : namespace => "${namespace}--" }
-
-  # Azure ABAC conditions (version 2.0) holding a role assignment on the vault to one namespace's
-  # secrets. A condition applies to the actions it names and leaves the rest of the role alone, so
-  # each says: for these actions, only a secret under the prefix. An existing secret is matched by its
-  # name as a resource; one being created or restored, which does not exist yet, by the name in the
-  # request.
-  #
-  # Reading the value of a secret - `Key Vault Secrets User`. Listing the vault is not gated; see
-  # key_vault_namespace_reader.
-  key_vault_read_conditions = {
-    for namespace, prefix in local.key_vault_secret_prefixes : namespace => <<-CONDITION
-      (
-       (
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
-       )
-       OR
-       (
-        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
-       )
-      )
-    CONDITION
-  }
-
-  # Everything `Key Vault Secrets Officer` can do to a secret, apart from listing them.
-  key_vault_write_conditions = {
-    for namespace, prefix in local.key_vault_secret_prefixes : namespace => <<-CONDITION
-      (
-       (
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/update/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/delete'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/backup/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/recover/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/purge/action'})
-       )
-       OR
-       (
-        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
-       )
-      )
-      AND
-      (
-       (
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/setSecret/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/restore/action'})
-       )
-       OR
-       (
-        @Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
-       )
-      )
-    CONDITION
-  }
+  # Each namespace's share of the vault, as the ABAC conditions that hold a role assignment to it -
+  # the estate's conventions, shared with shared/ - see modules/conventions.
+  key_vault_read_conditions  = module.conventions.key_vault_read_conditions
+  key_vault_write_conditions = module.conventions.key_vault_write_conditions
 
   # The namespace grants that come with the namespace's secrets: whoever may write in the namespace
   # manages its share of the vault as well. Keyed like the grants they come from.
@@ -260,6 +193,10 @@ locals {
   # access to resources that already exist - and a cluster that brings no network has none of those
   # to be granted. The identity is not created at all in that case; the cluster's own is used.
   system_assigned_identity = local.is_automatic && !local.byo_network
+
+  # The environment a cluster belongs to, from its name - <what it is>-<environment>-<which one> - for
+  # the names of the environment's shared resources: `aks-prototype-a` is in `prototype`.
+  environment = length(local.name_segments) < 2 ? var.name : local.name_segments[1]
 
   # The principal the cluster acts as towards Azure: the identity created here, or its own.
   cluster_identity_principal_id = local.system_assigned_identity ? module.aks.identity_principal_id : one(azurerm_user_assigned_identity.this[*].principal_id)
@@ -341,22 +278,12 @@ locals {
     var.network_profile.service_cidr,
   ]) : local.azure_assigned_cluster_cidrs
 
-  # Short code for the region, for the identity name below. Azure has no standard for these, so this
-  # is the estate's own convention rather than something derivable - a region that is not listed here
-  # gets added here. The identity is refused rather than named with a guess.
-  # Country codes ALPHA-2 & ALPHA-3: https://www.iban.com/country-codes 
-  location_code = lookup(local.location_codes, var.location, "")
-  location_codes = {
-    finlandcentral = "fic"
-    francecentral  = "frc"
-    swedencentral  = "sec"
-    westeurope     = "euw"
-    uksouth        = "uks"
-    ukwest         = "ukw"
-  }
+  # Short code for the region, for the identity names below - see modules/conventions. Empty for a
+  # region with no code, which the identity is refused for rather than named with a guess.
+  location_code = module.conventions.location_code
   # `id-<region code>-<environment>-<function>`, worked out from the cluster name and the region
   # rather than stated per environment. A cluster name reads <what it is>-<environment>-<which one>,
-  # so `aks-prototype-free` in swedencentral is run by `id-sec-prototype-aks-free`: the environment
+  # so `aks-prototype-a` in swedencentral is run by `id-sec-prototype-aks-a`: the environment
   # moves to the front of the function, and everything past it distinguishes the cluster from its
   # siblings in the same environment. A name with nothing to split has no environment to lift out,
   # and becomes `id-<region code>-<name>`.

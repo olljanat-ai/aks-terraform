@@ -20,11 +20,11 @@ resource_group_name = "rg-aks-prototype"
 #
 # That is the whole point of this file. Attaching an Automatic cluster to the existing network is
 # what has been failing - the bring-your-own subnets and the API server injected into a delegated
-# one - while prototype-free builds in that same network without trouble. So the network is taken
+# one - while prototype-a builds in that same network without trouble. So the network is taken
 # out of the picture here rather than tuned around, and what is left is the SKU on its own.
 #
 # The configuration supports the existing-network arrangement in full; nothing about it was removed,
-# and prototype-free still uses it. To put this cluster back on it, name the network and its subnets
+# and prototype-a still uses it. To put this cluster back on it, name the network and its subnets
 # again - all of these go together, and Terraform refuses a half-filled set:
 #
 #   virtual_network_name                = "vnet-aks-prototype"

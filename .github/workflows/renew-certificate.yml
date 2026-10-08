@@ -20,7 +20,9 @@ name: Renew Certificate
 # interval); nothing in the cluster is restarted or redeployed.
 #
 # The vault, the DNS zone and their resource groups are not configuration here: they are read out of
-# the environment's variables file, envs/<environment>.tfvars, which is what created them.
+# the variables file that created them - for `prototype`, the environment's shared resources in
+# shared/envs/prototype.tfvars, which both of its clusters use; for any other, the cluster's own
+# envs/<environment>.tfvars.
 #
 # Key Vault is also the only state this workflow keeps. Nothing is carried between runs on disk: the
 # certificate already in the vault decides whether a renewal is due, and the ACME account key sits
@@ -53,11 +55,11 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Environment whose Key Vault and DNS zone to use: envs/<environment>.tfvars"
+        description: "Environment whose Key Vault and DNS zone to use: shared/envs/prototype.tfvars, or envs/<environment>.tfvars"
         required: true
-        default: "prototype-free"
+        default: "prototype"
         type: choice
-        options: [prototype-free, prototype-automatic, prototype-prd-economy]
+        options: [prototype, prototype-automatic, prototype-prd-economy]
       domains:
         description: "Comma-separated SANs. The platform's hostname of the listener must be one of them"
         required: false
@@ -85,7 +87,7 @@ permissions:
 
 jobs:
   renew:
-    name: ingress-gateway--${{ matrix.certificate_name }} (${{ inputs.environment || 'prototype-free' }})
+    name: ingress-gateway--${{ matrix.certificate_name }} (${{ inputs.environment || 'prototype' }})
     runs-on: ubuntu-latest
     # The schedule (and a push) renews every certificate the platform's listeners serve; a run by
     # hand, the one it is given. A certificate that fails does not hold back the others.
@@ -96,15 +98,15 @@ jobs:
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
-    environment: ${{ inputs.environment || 'prototype-free' }}
+    environment: ${{ inputs.environment || 'prototype' }}
     concurrency:
       # One issuance at a time per environment - the certificates of one run take turns, and share
       # one ACME account - and never cancel a run mid-order, it would leave the DNS-01 TXT records
       # behind.
-      group: renew-certificate-${{ inputs.environment || 'prototype-free' }}
+      group: renew-certificate-${{ inputs.environment || 'prototype' }}
       cancel-in-progress: false
     env:
-      TF_ENV: ${{ inputs.environment || 'prototype-free' }}
+      TF_ENV: ${{ inputs.environment || 'prototype' }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -157,13 +159,14 @@ jobs:
         run: |
           set -euo pipefail
           file="envs/${TF_ENV}.tfvars"
+          # The prototype environment's vault and zones are its shared resources, not a cluster's.
+          [ "$TF_ENV" != "prototype" ] || file="shared/envs/prototype.tfvars"
           tfvar() {
             sed -nE "s/^$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$file" | head -n 1
           }
           vault="$(tfvar key_vault_name)"
           zone="$(tfvar dns_zone_name)"
           zone_rg="$(tfvar dns_zone_resource_group_name)"
-          [ -n "$zone_rg" ] || zone_rg="$(tfvar shared_resource_group_name)"
           [ -n "$zone_rg" ] || zone_rg="$(tfvar resource_group_name)"
           if [ -z "$vault" ]; then
             echo "::error::$file sets no key_vault_name; the cluster has no Key Vault to put the certificate in" >&2

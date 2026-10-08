@@ -1,5 +1,13 @@
 data "azurerm_client_config" "current" {}
 
+module "conventions" {
+  source = "./modules/conventions"
+
+  location             = var.location
+  environment          = local.environment
+  key_vault_namespaces = local.key_vault_namespaces
+}
+
 data "azurerm_resource_group" "this" {
   name = var.resource_group_name
 }
@@ -126,7 +134,7 @@ resource "azurerm_user_assigned_identity" "this" {
 
     precondition {
       condition     = local.location_code != ""
-      error_message = "No short code is known for ${var.location}, so the identity of ${var.name} cannot be named. Add it to local.location_codes in locals.tf."
+      error_message = "No short code is known for ${var.location}, so the identity of ${var.name} cannot be named. Add it to local.location_codes in modules/conventions/main.tf."
     }
   }
 }
@@ -407,30 +415,41 @@ resource "azurerm_role_assignment" "external_dns_internal" {
   principal_type       = "ServicePrincipal"
 }
 
-# What outlives the cluster - its Key Vault and the disks of its persistent volumes - lives in a
-# resource group of its own, which exists already like the cluster's and is shared with whichever
-# cluster takes the workloads over. See the README, "Shared resource group".
-data "azurerm_resource_group" "shared" {
-  count = var.shared_resource_group_name == null ? 0 : 1
+# Portable disks: the platform's `portable-disk` StorageClass creates its disks in resource_group_name
+# rather than in the node resource group AKS deletes with the cluster, so a disk outlives the cluster
+# and can be attached to the next one in the environment. The Azure Disk CSI driver acts as the
+# cluster identity, which AKS grants what it needs in the node resource group only.
+#
+# The grant here is a role of the cluster's own that covers disks and snapshots and nothing else:
+# resource_group_name holds the environment's other cluster too, its identities and the shared Key
+# Vault, and Contributor - what Microsoft documents for a disk outside the node resource group -
+# would let one cluster change all of them. Attaching a disk is a write on the node's VM, which AKS
+# has granted already.
+resource "azurerm_role_definition" "portable_disks" {
+  count = var.portable_disks_enabled ? 1 : 0
 
-  name = var.shared_resource_group_name
+  name        = "Portable disks (${var.name})"
+  scope       = data.azurerm_resource_group.this.id
+  description = "Lets the Azure Disk CSI driver of ${var.name} create, attach, snapshot and delete the disks of persistent volumes in ${var.resource_group_name}."
+
+  permissions {
+    actions = [
+      "Microsoft.Compute/disks/*",
+      "Microsoft.Compute/snapshots/*",
+      "Microsoft.Resources/subscriptions/resourceGroups/read",
+    ]
+  }
+
+  assignable_scopes = [data.azurerm_resource_group.this.id]
 }
 
-# The Azure Disk CSI driver acts as the cluster identity. Within the node resource group AKS grants
-# it what it needs; a disk the platform's StorageClass asks for in the shared group - and a disk
-# another cluster created there - is created, attached and deleted only with `Contributor` on the
-# group, which is what Microsoft documents for a disk outside the node resource group.
-#
-# That is management plane access to the vault in the group as well: it cannot read a secret - the
-# vault authorizes data through Azure RBAC, and Contributor holds no data action - but it could
-# delete the vault, which soft delete would keep recoverable for 90 days.
-resource "azurerm_role_assignment" "shared_disks" {
-  count = var.create_role_assignments && var.shared_resource_group_name != null ? 1 : 0
+resource "azurerm_role_assignment" "portable_disks" {
+  count = var.portable_disks_enabled && var.create_role_assignments ? 1 : 0
 
-  principal_id         = local.cluster_identity_principal_id
-  scope                = data.azurerm_resource_group.shared[0].id
-  role_definition_name = "Contributor"
-  principal_type       = "ServicePrincipal"
+  principal_id       = local.cluster_identity_principal_id
+  scope              = data.azurerm_resource_group.this.id
+  role_definition_id = azurerm_role_definition.portable_disks[0].role_definition_resource_id
+  principal_type     = "ServicePrincipal"
 }
 
 # A public API server with no allowlist is reachable from anywhere on the internet, and Azure will

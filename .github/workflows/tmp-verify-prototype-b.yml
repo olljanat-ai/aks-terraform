@@ -62,7 +62,10 @@ jobs:
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
           set -x
-          kubectl get gitrepositories.source.toolkit.fluxcd.io,kustomizations.kustomize.toolkit.fluxcd.io -n example -o yaml
+          # Re-read the example namespace's secrets from Key Vault now rather than at the next hourly refresh.
+          kubectl -n example annotate externalsecrets.external-secrets.io --all force-sync=$(date +%s) --overwrite
+          sleep 30
+          kubectl get externalsecrets.external-secrets.io,secrets -n example
           kubectl get externalsecrets.external-secrets.io,secretstores.external-secrets.io,secrets -n example
           kubectl get externalsecrets.external-secrets.io -n example -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
           kubectl describe externalsecrets.external-secrets.io -n example | tail -n 40

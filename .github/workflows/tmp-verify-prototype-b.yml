@@ -17,10 +17,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  flux:
     runs-on: ubuntu-latest
     environment: prototype
-    timeout-minutes: 240
+    timeout-minutes: 60
     env:
       RESOURCE_GROUP: rg-aks-prototype
       CLUSTER: aks-prototype-b
@@ -38,36 +38,10 @@ jobs:
           az account set --subscription "$AZURE_SUBSCRIPTION_ID"
           sudo az aks install-cli --only-show-errors >/dev/null
 
-      # The destroy and the new deploy run in the other workflow; wait for the new cluster to be up and
-      # its platform configuration to have applied the stateless policy.
-      - name: Wait for the rebuilt cluster
+      - name: Credentials
         run: |
-          set -u
           az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --overwrite-existing --only-show-errors
-          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          kubelogin convert-kubeconfig -l spn
-          for i in $(seq 1 30); do
-            echo "== $(date -u +%T)"
-            kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A || true
-            if kubectl get validatingadmissionpolicy no-persistent-storage; then
-              exit 0
-            fi
-            sleep 60
-          done
-          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
-          kubectl get gitrepositories.source.toolkit.fluxcd.io -A
-          echo "::error::no-persistent-storage did not appear within 30 minutes."
-          exit 1
-
-      - name: Delete AKS's StorageClasses
-        run: |
-          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          set -x
-          kubectl get storageclass
-          kubectl delete storageclass default managed-csi-premium-v2 --ignore-not-found
-          sleep 120
-          kubectl get storageclass
-          test -z "$(kubectl get storageclass -o name)"
+          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l spn
 
       - name: Flux in sync, aks-hello up, no boot-log
         run: |
@@ -94,9 +68,35 @@ jobs:
           curl -fsS --max-time 10 https://hello-b.onek8s.lol/ | head -c 500; echo
           if curl -fsS --max-time 10 https://hello-b.onek8s.lol/boot-log/log.txt; then echo "::error::boot-log answers."; exit 1; fi
 
+
+  storageclasses:
+    runs-on: ubuntu-latest
+    environment: prototype
+    timeout-minutes: 120
+    env:
+      RESOURCE_GROUP: rg-aks-prototype
+      CLUSTER: aks-prototype-b
+      AAD_SERVICE_PRINCIPAL_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AAD_SERVICE_PRINCIPAL_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    steps:
+      - name: Sign in to Azure
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          az login --service-principal --username "$AZURE_CLIENT_ID" --password "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" --output none
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+          sudo az aks install-cli --only-show-errors >/dev/null
+
+      - name: Credentials
+        run: |
+          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --overwrite-existing --only-show-errors
+          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l spn
+
       # AKS's two StorageClasses were deleted at 19:38:11 UTC.
       - name: An hour later, still no StorageClass
-        if: always()
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
           wait=$(( $(date -d '2026-10-08T20:39:00Z' +%s) - $(date +%s) ))

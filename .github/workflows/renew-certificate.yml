@@ -48,10 +48,15 @@ on:
     - cron: "17 3 12 * *"
   # A change to this file on main - a certificate added, its domains changed - takes effect at once
   # rather than at the next month's run. A certificate that is not due is left alone.
+  # So does a change to the environment's shared resources - a vault created again starts empty,
+  # and without the certificate no listener serves and no hostname is published.
   push:
     branches: [main]
     paths:
       - .github/workflows/renew-certificate.yml
+      - shared/envs/prototype.tfvars
+  # Temporary: issue the certificate into the new shared vault from this pull request.
+  pull_request:
   workflow_dispatch:
     inputs:
       environment:

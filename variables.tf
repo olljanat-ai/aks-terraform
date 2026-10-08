@@ -764,7 +764,14 @@ variable "managed_namespaces" {
     adoption_policy = optional(string)
     annotations     = optional(map(string), {})
     delete_policy   = optional(string)
-    labels          = optional(map(string), {})
+    flux = optional(object({
+      url                   = string
+      branch                = optional(string, "main")
+      path                  = optional(string, "./")
+      secret_name           = optional(string)
+      sync_interval_seconds = optional(number, 300)
+    }))
+    labels = optional(map(string), {})
     network_policy = optional(object({
       egress  = optional(string)
       ingress = optional(string)
@@ -880,6 +887,39 @@ nothing while `azure_rbac_enabled = false` and Terraform says so on every plan. 
 a control plane role and works either way. Nothing is granted at all while
 `create_role_assignments = false`.
 
+`flux` makes the namespace a tenant that deploys itself from a Git repository of its own: a
+namespace-scoped Flux configuration, named after the namespace, that syncs `path` on `branch` into
+it. It is an Azure resource like the cluster's `platform` configuration, so whether the team's
+repository is in sync - and why not - shows in the portal's GitOps view of the cluster:
+
+```hcl
+managed_namespaces = {
+  team-payments = {
+    flux = {
+      url         = "https://github.com/contoso/team-payments-deploy"
+      path        = "./apps"
+      secret_name = "team-payments-deploy-git"
+    }
+  }
+}
+```
+
+- `url` - `https://` or `ssh://` URL of the repository.
+- `branch` - Branch to sync. Defaults to `main`.
+- `path` - Directory in the repository to apply. Defaults to the top.
+- `secret_name` - For a private repository: a Secret in the namespace that Flux reads it with -
+  `username` and `password` for HTTPS, `identity` and `known_hosts` for SSH. Nothing secret passes
+  through Terraform or Azure: the Flux repository syncs it from the namespace's share of the Key
+  Vault. Leave it unset for a public repository.
+- `sync_interval_seconds` - How often the repository is read and applied, and how soon a failed
+  apply is retried. Defaults to 300; at least 60.
+
+The repository is applied by the extension's `flux-applier` service account in the namespace, and
+the AKS Flux extension refuses references across namespaces: its manifests land in this namespace
+and nowhere else. The configuration has no `targetNamespace` to put an object that names no
+namespace into this one, so the repository's `kustomization.yaml` sets `namespace:` itself. Setting `flux` needs nothing else of the
+cluster: the Flux extension is installed for it whether or not `flux_git_repository` is set.
+
 These are Azure resources rather than plain Kubernetes namespaces: AKS creates the namespace, the
 default `NetworkPolicy` and the default `ResourceQuota` in the cluster and reconciles them, and
 Azure RBAC can be scoped to the namespace. Removing an entry deletes the Azure resource; whether
@@ -978,6 +1018,40 @@ DESCRIPTION
       namespace.delete_policy == null || contains(["Delete", "Keep"], coalesce(namespace.delete_policy, ""))
     ])
     error_message = "managed_namespaces[*].delete_policy must be either \"Delete\" or \"Keep\", or left unset to follow managed_namespace_defaults."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.flux == null || can(regex("^(https?|ssh)://", namespace.flux.url))
+    ])
+    error_message = "managed_namespaces[*].flux.url must start with https://, http:// or ssh://."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.flux == null || try(trimspace(namespace.flux.branch) != "", false)
+    ])
+    error_message = "managed_namespaces[*].flux.branch must not be empty."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.flux == null || try(namespace.flux.sync_interval_seconds >= 60, false)
+    ])
+    error_message = "managed_namespaces[*].flux.sync_interval_seconds must be at least 60."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) :
+      namespace.flux == null || try(namespace.flux.secret_name == null || can(regex("^[a-z0-9]([-.a-z0-9]{0,251}[a-z0-9])?$", namespace.flux.secret_name)), false)
+    ])
+    error_message = "managed_namespaces[*].flux.secret_name must be the name of a Kubernetes Secret: lowercase letters, digits, hyphens and dots, starting and ending with a letter or digit."
+  }
+  # The tenant's Flux configuration is named after the namespace, next to the cluster's own
+  # `platform` - and Azure has one name space for both.
+  validation {
+    condition     = !contains([for name, namespace in var.managed_namespaces : name if namespace.flux != null], "platform")
+    error_message = "managed_namespaces.platform cannot set flux: its Flux configuration would be named `platform`, which is the cluster's own. Name the namespace something else."
   }
   validation {
     condition = alltrue(flatten([

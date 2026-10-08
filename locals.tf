@@ -6,8 +6,45 @@ locals {
   # API version of the Kubernetes Configuration resource provider, which owns cluster extensions.
   kubernetes_configuration_api_version = "2024-11-01"
 
-  # Flux is installed only for a cluster that names a repository for it to sync.
-  flux_enabled = var.flux_git_repository != null
+  # Flux is installed only for a cluster that names a repository for it to sync: its own, or a
+  # tenant namespace's.
+  flux_enabled           = var.flux_git_repository != null
+  flux_extension_enabled = local.flux_enabled || length(local.managed_namespace_flux_configurations) > 0
+
+  # The Flux configuration of each managed namespace that deploys itself from a repository of its
+  # own, as sent to Azure. Namespace scope, in the namespace itself: the extension applies it as
+  # that namespace's `flux-applier` and refuses references across namespaces, so the repository
+  # reaches nothing outside it. Its credential is a Secret already in the namespace, synced from the
+  # namespace's share of the Key Vault, so nothing secret passes through here.
+  #
+  # A failed apply is retried as often as the repository is read, as on the platform's, and the
+  # Kustomization waits for what it applied to become ready, so a rollout that never does shows up
+  # on it - and in the portal.
+  managed_namespace_flux_configurations = {
+    for name, namespace in var.managed_namespaces : name => {
+      properties = {
+        gitRepository = merge({
+          repositoryRef = {
+            branch = namespace.flux.branch
+          }
+          syncIntervalInSeconds = namespace.flux.sync_interval_seconds
+          url                   = namespace.flux.url
+        }, namespace.flux.secret_name == null ? {} : { localAuthRef = namespace.flux.secret_name })
+        kustomizations = {
+          apps = {
+            path                   = namespace.flux.path
+            prune                  = true
+            syncIntervalInSeconds  = namespace.flux.sync_interval_seconds
+            retryIntervalInSeconds = namespace.flux.sync_interval_seconds
+            wait                   = true
+          }
+        }
+        namespace  = name
+        scope      = "namespace"
+        sourceKind = "GitRepository"
+      }
+    } if namespace.flux != null
+  }
 
   # The credential Flux reads a private repository with. Azure takes protected settings base64
   # encoded, and the HTTPS user in the open next to the repository URL.

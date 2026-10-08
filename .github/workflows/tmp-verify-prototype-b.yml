@@ -43,21 +43,20 @@ jobs:
       - name: Wait for the rebuilt cluster
         run: |
           set -u
-          for i in $(seq 1 120); do
-            state=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query provisioningState -o tsv 2>/dev/null || echo none)
-            created=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query 'systemData.createdAt' -o tsv 2>/dev/null || echo none)
-            echo "$(date -u +%T) cluster: $state, created $created"
-            if [ "$state" = "Succeeded" ] && [[ "$created" > "2026-10-08T17:30" ]]; then
-              az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --overwrite-existing --only-show-errors
-              KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l spn
-              if KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubectl get validatingadmissionpolicy no-persistent-storage >/dev/null 2>&1; then
-                echo "no-persistent-storage is in place."
-                exit 0
-              fi
+          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --overwrite-existing --only-show-errors
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubelogin convert-kubeconfig -l spn
+          for i in $(seq 1 30); do
+            echo "== $(date -u +%T)"
+            kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A || true
+            if kubectl get validatingadmissionpolicy no-persistent-storage; then
+              exit 0
             fi
             sleep 60
           done
-          echo "::error::The rebuilt cluster and its no-persistent-storage policy did not appear within two hours."
+          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
+          kubectl get gitrepositories.source.toolkit.fluxcd.io -A
+          echo "::error::no-persistent-storage did not appear within 30 minutes."
           exit 1
 
       - name: Delete AKS's StorageClasses

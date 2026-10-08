@@ -578,7 +578,8 @@ deploys, each acting as an identity created here:
 - **DNS**: with `dns_zone_name` set, `<cluster identity>-dns` is federated with
   `external-dns/external-dns` and granted `DNS Zone Contributor` on the zone. external-dns keeps an A
   record per listener hostname, pointing at the Gateway's internal load balancer IP. The zone is
-  looked up in `resource_group_name` unless `dns_zone_resource_group_name` says otherwise - or, with
+  looked up in `shared_resource_group_name` - or `resource_group_name` without one - unless
+  `dns_zone_resource_group_name` says otherwise - or, with
   `dns_zone_create = true`, created there. A created zone answers nothing until the domain's
   registrar delegates to it: set the domain's NS records to the `dns_zone_name_servers` output
   (`terraform output dns_zone_name_servers`). **The zone answers with a private address**: a public zone then tells anyone who asks
@@ -588,7 +589,8 @@ deploys, each acting as an identity created here:
   writes public or private zones, never both - and granted `Private DNS Zone Contributor` on that
   Azure Private DNS zone. It keeps the same A records for the listener hostnames in that zone, and
   they resolve only in the networks the zone is linked to. The zone is looked up in
-  `resource_group_name` unless `internal_dns_zone_resource_group_name` says otherwise - or, with
+  `shared_resource_group_name` - or `resource_group_name` without one - unless
+  `internal_dns_zone_resource_group_name` says otherwise - or, with
   `internal_dns_zone_create = true`, created there and linked to the cluster's virtual network
   (which takes one: a cluster on the network AKS manages has nothing to link it to, and Terraform
   warns). In `prototype-free` the zone is `internal.onek8s.lol`, a subdomain of the public zone:
@@ -644,16 +646,17 @@ az keyvault secret set --vault-name <key_vault_name> --name example--api-key --v
 ## Shared resource group
 
 `shared_resource_group_name` names an existing resource group for **what outlives the cluster**:
-the Key Vault, the identities the namespaces read it as, and the disks of persistent volumes.
-Everything else stays per cluster - the cluster, and the node resource group AKS creates for it and
-deletes with it. Two clusters
-that name the same group can hand workloads to each other, which is how a cluster is replaced
+the Key Vault, the identities the namespaces read it as, the DNS zones the hostnames are published
+in, and the disks of persistent volumes. Everything else stays per cluster - the cluster, and the
+node resource group AKS creates for it and deletes with it. Two clusters that name the same group can
+hand workloads to each other, which is how a cluster is replaced
 rather than upgraded in place: build the next one beside it, move the workloads over, and retire it.
 
 | | In the shared group | |
 | --- | --- | --- |
 | Key Vault | Created by the cluster with `key_vault_create = true` (the default), looked up by every other with `key_vault_create = false` | Every grant on it - `Key Vault Administrator` for the admin groups, `Key Vault Secrets Officer` for the namespaces' writers, the namespaces' own read access - and the Flux webhook's token are made once, by the cluster that creates the vault. |
 | Namespace identities | `id-<key_vault_name>-<namespace>`, created with the vault and looked up by every other cluster | One identity per namespace, not per cluster: each cluster adds a federated credential of its own (`aks-<cluster name>`) to it, for its namespace's `key-vault` service account. A namespace is the same principal, with the same client ID and the same grants, wherever it runs - including anything granted to it outside this repository. Azure allows 20 credentials on an identity, so 20 clusters at once. A namespace with a share in a cluster that looks the vault up needs one in the configuration that creates it, or its identity is not there to find. |
+| DNS zones | Created by the cluster with `dns_zone_create` and `internal_dns_zone_create`, looked up by every other - unless `dns_zone_resource_group_name` or `internal_dns_zone_resource_group_name` puts them elsewhere | Every cluster's external-dns publishes its own hostnames in the same zones, and owns its records under its own name (`txtOwnerId`), so it never touches another cluster's. A hostname moves with its workload: the old cluster's external-dns deletes the record, and the new one's publishes it. The private zone is linked to the network by the cluster that creates it; clusters in the same network resolve it through that link. |
 | Disks | Created by the Azure Disk CSI driver, for the platform's `portable-disk` StorageClass | The cluster identity holds `Contributor` on the group, which the driver needs to create, attach and delete a disk outside the node resource group. The group's name reaches the Flux repository as `shared_resource_group_name`. The StorageClass keeps a disk when its claim is deleted (`Retain`), and is zone-redundant, so a disk attaches to a node in any zone. |
 
 The cluster's own identity and external-dns's stay per cluster, in `resource_group_name`. They act
@@ -665,29 +668,47 @@ vault authorizes data through Azure RBAC alone - but it could delete the vault, 
 keeps recoverable for 90 days.
 
 `prototype-free` and `prototype-free-b` share `rg-aks-prototype-shared`: `prototype-free` creates the
-vault, `prototype-free-b` looks it up. Moving a workload between them - its secrets, its volumes, its
+vault, the identities and the zones, `prototype-free-b` looks them up. Moving a workload between them - its secrets, its volumes, its
 hostnames - is described in aks-fluxcd-platform's README, "Moving a workload to another cluster".
 
-### Moving an existing vault into the shared group
+### Moving existing resources into the shared group
 
-A vault's resource group is part of its ID, so Terraform would **replace** a vault that moves to the
-shared group - and a vault destroyed here is purged, every secret in it with it. Move it in Azure
-instead, and tell Terraform where it went, before the first apply that names
-`shared_resource_group_name`:
+A resource group is part of a resource's ID, so Terraform would **replace** a vault or a zone that
+moves to the shared group. A vault destroyed here is purged, every secret in it with it; a public
+zone created again gets new name servers, and the domain's delegation points at nothing until the
+registrar is changed. Move them in Azure instead, and tell Terraform where they went, before the
+first apply that names `shared_resource_group_name`. For `prototype-free`:
 
 ```sh
-az resource move \
-  --destination-group rg-aks-prototype-shared \
-  --ids "$(az keyvault show --name kv-proto-aks-free --query id -o tsv)"
+src=rg-aks-prototype
+dst=rg-aks-prototype-shared
+vault="$(az keyvault show --name kv-proto-aks-free --query id -o tsv)"
+zone="$(az network dns zone show -g "$src" -n onek8s.lol --query id -o tsv)"
+internal="$(az network private-dns zone show -g "$src" -n internal.onek8s.lol --query id -o tsv)"
 
-terraform state rm 'azurerm_key_vault.this[0]'
+# One move: the zones take their records along, and the private zone its network link.
+az resource move --destination-group "$dst" --ids "$vault" "$zone" "$internal"
+
+for address in 'azurerm_key_vault.this[0]' 'azurerm_dns_zone.this[0]' \
+  'azurerm_private_dns_zone.internal[0]' 'azurerm_private_dns_zone_virtual_network_link.internal[0]'; do
+  terraform state rm "$address"
+done
+sub="$(az account show --query id -o tsv)"
 terraform import -var-file=envs/prototype-free.tfvars 'azurerm_key_vault.this[0]' \
-  "$(az keyvault show --name kv-proto-aks-free --query id -o tsv)"
+  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.KeyVault/vaults/kv-proto-aks-free"
+terraform import -var-file=envs/prototype-free.tfvars 'azurerm_dns_zone.this[0]' \
+  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.Network/dnsZones/onek8s.lol"
+terraform import -var-file=envs/prototype-free.tfvars 'azurerm_private_dns_zone.internal[0]' \
+  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.Network/privateDnsZones/internal.onek8s.lol"
+terraform import -var-file=envs/prototype-free.tfvars 'azurerm_private_dns_zone_virtual_network_link.internal[0]' \
+  "/subscriptions/$sub/resourceGroups/$dst/providers/Microsoft.Network/privateDnsZones/internal.onek8s.lol/virtualNetworkLinks/aks-prototype-free"
 ```
 
-Role assignments on the vault do not move with it. The next plan creates them again on the moved
-vault - the namespaces' readers, the writers and the admin groups - and adds the grant on the
-shared group; it should neither create nor destroy the vault. Should it replace the Flux webhook's
+Role assignments do not move with a resource. The next plan creates them again - on the vault, the
+namespaces' readers, the writers and the admin groups; on the zones, external-dns's - and adds the
+grant on the shared group; it should neither create nor destroy the vault, a zone or the link. The
+name servers of the public zone stay as they were, so the domain's delegation needs no change.
+external-dns is told the zones' new resource group through Flux, and catches up on its next sync. Should it replace the Flux webhook's
 token, `azurerm_key_vault_secret.flux_github_webhook[0]`, remove and import that the same way, by its
 `https://kv-proto-aks-free.vault.azure.net/secrets/flux-system--github-webhook-token/<version>` ID.
 The commands run against the environment's remote state, from a shell with the backend configured

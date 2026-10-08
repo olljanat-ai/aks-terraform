@@ -335,7 +335,7 @@ DESCRIPTION
 variable "dns_zone_resource_group_name" {
   type        = string
   default     = null
-  description = "Resource group of the DNS zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
+  description = "Resource group of the DNS zone - the existing one, or the one it is created in. Defaults to `shared_resource_group_name`, or `resource_group_name` without one."
 }
 
 variable "enable_telemetry" {
@@ -516,7 +516,7 @@ DESCRIPTION
 variable "internal_dns_zone_resource_group_name" {
   type        = string
   default     = null
-  description = "Resource group of the private zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
+  description = "Resource group of the private zone - the existing one, or the one it is created in. Defaults to `shared_resource_group_name`, or `resource_group_name` without one."
 }
 
 variable "key_vault_create" {
@@ -1259,7 +1259,8 @@ variable "shared_resource_group_name" {
   default     = null
   description = <<DESCRIPTION
 Name of an existing resource group for what outlives the cluster: the Key Vault, the identities its
-namespaces read it as, and the disks of its persistent volumes. Everything else - the cluster, its
+namespaces read it as, the public and private DNS zones its hostnames are published in, and the
+disks of its persistent volumes. Everything else - the cluster, its
 own identity and external-dns's, the node resource group AKS deletes with it - stays per cluster.
 Two clusters that name the same group can hand workloads to each other: a namespace is the same
 identity in both, reading the same vault, and a disk is attached to whichever cluster mounts it

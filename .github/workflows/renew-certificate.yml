@@ -163,6 +163,7 @@ jobs:
           vault="$(tfvar key_vault_name)"
           zone="$(tfvar dns_zone_name)"
           zone_rg="$(tfvar dns_zone_resource_group_name)"
+          [ -n "$zone_rg" ] || zone_rg="$(tfvar shared_resource_group_name)"
           [ -n "$zone_rg" ] || zone_rg="$(tfvar resource_group_name)"
           if [ -z "$vault" ]; then
             echo "::error::$file sets no key_vault_name; the cluster has no Key Vault to put the certificate in" >&2

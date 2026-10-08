@@ -37,7 +37,7 @@ virtual_network_resource_group_name = "rg-network"
 key_vault_name   = "kv-proto-aks-free"
 key_vault_create = false
 
-# aks-prototype-free's zones, looked up in resource_group_name rather than created. This cluster
+# aks-prototype-free's zones, looked up in shared_resource_group_name rather than created. This cluster
 # publishes hostnames of its own in them (clusters/prototype-free-b in aks-fluxcd-platform); its
 # external-dns owns its records under its own name and leaves the other cluster's alone. The private
 # zone is already linked to the network above.

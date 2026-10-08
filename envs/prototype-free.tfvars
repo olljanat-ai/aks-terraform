@@ -30,15 +30,16 @@ virtual_network_resource_group_name = "rg-network"
 # Vault names are global; pick another if this one is taken.
 key_vault_name = "kv-proto-aks-free"
 
-# Where the Gateway's hostnames are published. The zone is created here, in resource_group_name; the
-# cluster gets an identity federated with external-dns's service account, and the Flux repository is
-# told where the zone is. Point the domain's NS records at the dns_zone_name_servers output.
+# Where the Gateway's hostnames are published. The zone is created here, in
+# shared_resource_group_name, and aks-prototype-free-b publishes in it too. The cluster gets an
+# identity federated with external-dns's service account, and the Flux repository is told where the
+# zone is. Point the domain's NS records at the dns_zone_name_servers output.
 dns_zone_name   = "onek8s.lol"
 dns_zone_create = true
 
-# The same hostnames, privately: an Azure Private DNS zone created here, in resource_group_name, and
-# linked to the network above. external-dns publishes the listener hostnames that are in it, and
-# they resolve only inside the network.
+# The same hostnames, privately: an Azure Private DNS zone created here, in
+# shared_resource_group_name, and linked to the network above. external-dns publishes the listener
+# hostnames that are in it, and they resolve only inside the network.
 internal_dns_zone_name   = "internal.onek8s.lol"
 internal_dns_zone_create = true
 

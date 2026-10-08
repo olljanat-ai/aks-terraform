@@ -12,8 +12,9 @@ on:
 permissions:
   contents: read
 
+# A group of its own: a newer run must not cancel the one-hour StorageClass check already running.
 concurrency:
-  group: tmp-verify-prototype-b
+  group: tmp-verify-prototype-b-2
   cancel-in-progress: true
 
 jobs:
@@ -64,7 +65,13 @@ jobs:
           kubectl get gitrepositories.source.toolkit.fluxcd.io,kustomizations.kustomize.toolkit.fluxcd.io -n example -o yaml
           kubectl get externalsecrets.external-secrets.io,secretstores.external-secrets.io,secrets -n example
           kubectl get externalsecrets.external-secrets.io -n example -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
-          kubectl get fluxconfigs.clusterconfig.azure.com -n example -o yaml
+          kubectl describe externalsecrets.external-secrets.io -n example | tail -n 40
+          kubectl get events -n example --sort-by=.lastTimestamp | tail -n 20
+          kubectl get secretstore -n example key-vault -o yaml | tail -n 20
+          for name in example--aks-fluxcd-example-git example--ghcr-pull ingress-gateway--wildcard flux-system--github-webhook-token; do
+            echo "== $name: $(az keyvault secret show --vault-name kv-sec-prototype-shared --name "$name" --query '{id: id, enabled: attributes.enabled}' -o json 2>&1 | tr '\n' ' ')"
+          done
+          az keyvault secret list --vault-name kv-sec-prototype-shared --query '[].name' -o tsv 2>&1 || true
           az k8s-configuration flux show -g "$RESOURCE_GROUP" -c "$CLUSTER" -t managedClusters -n example -o json
           kubectl logs -n flux-system deploy/source-controller --tail=60 | grep -i example || true
           kubectl wait --for=condition=Ready kustomizations.kustomize.toolkit.fluxcd.io --all -n flux-system --timeout=10m
@@ -84,6 +91,8 @@ jobs:
 
 
   storageclasses:
+    # Running in the previous verification run (deleted 20:26 UTC); not again.
+    if: false
     runs-on: ubuntu-latest
     environment: prototype
     timeout-minutes: 180

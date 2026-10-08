@@ -34,13 +34,13 @@ permissions:
 
 jobs:
   status:
-    name: status ${{ inputs.cluster || 'aks-prototype-a' }}
+    name: status ${{ inputs.cluster || 'aks-prototype-b' }}
     runs-on: ubuntu-latest
     environment: prototype
     env:
       # The clusters and their shared resources - the zones among them - are all in one group.
       RESOURCE_GROUP: rg-aks-prototype
-      CLUSTER: ${{ inputs.cluster || 'aks-prototype-a' }}
+      CLUSTER: ${{ inputs.cluster || 'aks-prototype-b' }}
       DNS_ZONE: onek8s.lol
       INTERNAL_DNS_ZONE: internal.onek8s.lol
     steps:
@@ -57,7 +57,7 @@ jobs:
       - name: Cluster
         run: |
           az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" \
-            --query '{kubernetesVersion: kubernetesVersion, currentKubernetesVersion: currentKubernetesVersion, provisioningState: provisioningState, powerState: powerState.code, ingressProfile: ingressProfile, autoUpgrade: autoUpgradeProfile}' \
+            --query '{storageProfile: storageProfile, kubernetesVersion: kubernetesVersion, currentKubernetesVersion: currentKubernetesVersion, provisioningState: provisioningState, powerState: powerState.code, ingressProfile: ingressProfile, autoUpgrade: autoUpgradeProfile}' \
             --output json
 
       - name: Flux configuration
@@ -93,6 +93,10 @@ jobs:
           # Report everything, whatever one command says.
           set +e -x
           kubectl version
+          kubectl get storageclass -o yaml
+          kubectl get csidrivers,csinodes,volumesnapshotclasses -o wide
+          kubectl get pods -n kube-system -o wide | grep -i -E "csi|snapshot"
+          kubectl get pvc,pv -A
           kubectl get nodes -o wide
           kubectl describe nodes | sed -n "/Allocatable:/,/Events:/p"
           kubectl get pods -A --field-selector=status.phase=Pending -o wide

@@ -20,7 +20,7 @@ jobs:
   flux:
     runs-on: ubuntu-latest
     environment: prototype
-    timeout-minutes: 60
+    timeout-minutes: 180
     env:
       RESOURCE_GROUP: rg-aks-prototype
       CLUSTER: aks-prototype-b
@@ -38,10 +38,23 @@ jobs:
           az account set --subscription "$AZURE_SUBSCRIPTION_ID"
           sudo az aks install-cli --only-show-errors >/dev/null
 
-      - name: Credentials
+      # The cluster may still be (re)building: wait for its credentials and the platform's
+      # no-persistent-storage policy, which Flux applies.
+      - name: Wait for the cluster and its policy
         run: |
-          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --overwrite-existing --only-show-errors
-          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l spn
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          for i in $(seq 1 75); do
+            echo "== $(date -u +%T)"
+            if az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$KUBECONFIG" --overwrite-existing --only-show-errors \
+              && kubelogin convert-kubeconfig -l spn \
+              && kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A \
+              && kubectl get validatingadmissionpolicy no-persistent-storage; then
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "::error::The cluster or its no-persistent-storage policy did not come up within 75 minutes."
+          exit 1
 
       - name: Flux in sync, aks-hello up, no boot-log
         run: |
@@ -72,7 +85,7 @@ jobs:
   storageclasses:
     runs-on: ubuntu-latest
     environment: prototype
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       RESOURCE_GROUP: rg-aks-prototype
       CLUSTER: aks-prototype-b
@@ -90,21 +103,42 @@ jobs:
           az account set --subscription "$AZURE_SUBSCRIPTION_ID"
           sudo az aks install-cli --only-show-errors >/dev/null
 
-      - name: Credentials
+      # The cluster may still be (re)building: wait for its credentials and the platform's
+      # no-persistent-storage policy, which Flux applies.
+      - name: Wait for the cluster and its policy
         run: |
-          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --overwrite-existing --only-show-errors
-          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l spn
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          for i in $(seq 1 75); do
+            echo "== $(date -u +%T)"
+            if az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$KUBECONFIG" --overwrite-existing --only-show-errors \
+              && kubelogin convert-kubeconfig -l spn \
+              && kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A \
+              && kubectl get validatingadmissionpolicy no-persistent-storage; then
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "::error::The cluster or its no-persistent-storage policy did not come up within 75 minutes."
+          exit 1
 
-      # AKS's two StorageClasses were deleted at 19:38:11 UTC.
+      - name: Delete AKS's StorageClasses
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          set -x
+          kubectl get storageclass
+          kubectl delete storageclass default managed-csi-premium-v2 --ignore-not-found
+          date -u +%s > "$RUNNER_TEMP/deleted-at"
+          sleep 120
+          kubectl get storageclass
+          test -z "$(kubectl get storageclass -o name)"
+
       - name: An hour later, still no StorageClass
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          wait=$(( $(date -d '2026-10-08T20:39:00Z' +%s) - $(date +%s) ))
+          wait=$(( $(cat "$RUNNER_TEMP/deleted-at") + 3600 - $(date +%s) ))
           [ "$wait" -gt 0 ] && sleep "$wait"
-          # The token kubelogin cached may have expired in the meantime; it renews it itself.
           set -x
           kubectl get storageclass
-          kubectl get events -A --field-selector reason=FailedCreate 2>/dev/null | tail -n 20 || true
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A
           curl -fsS --max-time 10 https://hello-b.onek8s.lol/healthz; echo
           if [ -n "$(kubectl get storageclass -o name)" ]; then

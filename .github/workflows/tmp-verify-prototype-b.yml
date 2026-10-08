@@ -46,7 +46,7 @@ jobs:
           for i in $(seq 1 75); do
             echo "== $(date -u +%T)"
             if az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$KUBECONFIG" --overwrite-existing --only-show-errors \
-              && kubelogin convert-kubeconfig -l spn \
+              && kubelogin convert-kubeconfig -l spn --client-id "$AAD_SERVICE_PRINCIPAL_CLIENT_ID" \
               && kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A \
               && kubectl get validatingadmissionpolicy no-persistent-storage; then
               exit 0
@@ -111,7 +111,7 @@ jobs:
           for i in $(seq 1 75); do
             echo "== $(date -u +%T)"
             if az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$KUBECONFIG" --overwrite-existing --only-show-errors \
-              && kubelogin convert-kubeconfig -l spn \
+              && kubelogin convert-kubeconfig -l spn --client-id "$AAD_SERVICE_PRINCIPAL_CLIENT_ID" \
               && kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A \
               && kubectl get validatingadmissionpolicy no-persistent-storage; then
               exit 0

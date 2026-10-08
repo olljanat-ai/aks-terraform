@@ -22,44 +22,8 @@ jobs:
       action: apply
     secrets: inherit
 
-  # Destroy prototype-b, so that it is built again from nothing. Same concurrency group as the
-  # deploy workflow's job for the stack, so it waits for any apply still running.
-  destroy:
-    needs: shared
-    runs-on: ubuntu-latest
-    environment: prototype
-    concurrency:
-      group: terraform-prototype-b
-      cancel-in-progress: false
-    env:
-      TF_IN_AUTOMATION: "true"
-      TF_INPUT: "false"
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      FLUX_GIT_HTTPS_KEY: ${{ secrets.FLUX_GIT_HTTPS_KEY }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: "1.14.4"
-          terraform_wrapper: false
-      - name: Destroy
-        run: |
-          set -euo pipefail
-          if [ -n "$FLUX_GIT_HTTPS_KEY" ]; then
-            export TF_VAR_flux_git_credentials="{ https_key = \"$FLUX_GIT_HTTPS_KEY\" }"
-          fi
-          terraform init \
-            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="key=prototype-b.tfstate"
-          terraform destroy -auto-approve -no-color -var-file=envs/prototype-b.tfvars
-
   prototype-b:
-    needs: destroy
+    needs: shared
     uses: ./.github/workflows/deploy-prototype.yml
     with:
       stack: prototype-b

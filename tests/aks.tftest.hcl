@@ -3318,23 +3318,24 @@ run "sharing_a_vault_needs_its_name" {
 }
 
 # ----------------------------------------------------------------------------------------------
-# Container registry: images and OCI manifests read as the cluster's own identities
+# Container registry: images pulled as the kubelet identity
 # ----------------------------------------------------------------------------------------------
 
 run "without_a_registry_nothing_is_granted_on_one" {
   command = plan
 
   assert {
-    condition = alltrue([
-      length(azurerm_role_assignment.kubelet_container_registry_pull) == 0,
-      length(azurerm_user_assigned_identity.flux_source) == 0,
-    ])
+    condition     = length(azurerm_role_assignment.kubelet_container_registry_pull) == 0
     error_message = "Without container_registry_name the cluster should be granted nothing on a registry."
   }
 }
 
-run "an_oci_tenant_reads_its_artifact_as_the_source_controller_identity" {
+run "the_kubelet_pulls_from_the_registry" {
   command = plan
+
+  variables {
+    container_registry_name = "acrtest"
+  }
 
   override_data {
     target = data.azurerm_container_registry.this
@@ -3343,50 +3344,11 @@ run "an_oci_tenant_reads_its_artifact_as_the_source_controller_identity" {
     }
   }
 
-  variables {
-    container_registry_name = "acrtest"
-    managed_namespaces = {
-      team-payments = {
-        flux = {
-          url  = "oci://acrtest.azurecr.io/manifests/team-payments"
-          tag  = "main"
-          path = "./apps"
-        }
-      }
-    }
-  }
-
   assert {
     condition = alltrue([
-      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.sourceKind == "OCIRepository",
-      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.ociRepository.url == "oci://acrtest.azurecr.io/manifests/team-payments",
-      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.ociRepository.repositoryRef.tag == "main",
-      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.ociRepository.useWorkloadIdentity == true,
+      azurerm_role_assignment.kubelet_container_registry_pull[0].principal_id == "88888888-8888-8888-8888-888888888888",
+      azurerm_role_assignment.kubelet_container_registry_pull[0].role_definition_name == "AcrPull",
     ])
-    error_message = "An oci:// tenant should get an OCIRepository source read with workload identity."
+    error_message = "The kubelet identity should get AcrPull on the registry."
   }
-  assert {
-    condition = alltrue([
-      azurerm_federated_identity_credential.flux_source[0].subject == "system:serviceaccount:flux-system:source-controller",
-      azurerm_role_assignment.flux_source_container_registry_pull[0].role_definition_name == "AcrPull",
-      azapi_resource.flux_extension[0].body.properties.configurationSettings["workloadIdentity.enable"] == "true",
-    ])
-    error_message = "The source-controller should run as an identity of its own with AcrPull on the registry."
-  }
-}
-
-run "an_oci_tenant_needs_a_registry" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        flux = {
-          url = "oci://acrtest.azurecr.io/manifests/team-payments"
-        }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
 }

@@ -1,6 +1,5 @@
-# The environment's container registry: images, and the teams' manifests as OCI artifacts - see
-# container_registry_name. Every cluster of the environment pulls from it with identities of its own
-# (its kubelet's for images, its Flux source-controller's for manifests), granted by the cluster
+# The environment's container registry: the images the clusters run - see container_registry_name.
+# Every cluster of the environment pulls from it as its kubelet identity, granted by the cluster
 # configuration, so nothing secret is kept for it anywhere.
 #
 # Basic: a prototype's few images. Admin user off - only Entra ID identities reach it.
@@ -15,7 +14,7 @@ resource "azurerm_container_registry" "this" {
 }
 
 # Publishing to it: the principal this configuration is applied as - the service principal of the
-# GitHub workflows - pushes the images and the manifests from the teams' and the apps' repositories.
+# GitHub workflows - pushes the images from the apps' repositories.
 resource "azurerm_role_assignment" "container_registry_push" {
   count = var.container_registry_name != null && var.create_role_assignments ? 1 : 0
 

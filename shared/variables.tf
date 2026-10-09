@@ -130,10 +130,9 @@ variable "container_registry_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the environment's Azure Container Registry, created here: the images the clusters run, and
-the teams' Kubernetes manifests as OCI artifacts that their Flux configurations read - each cluster
-with an identity of its own, so nothing is stored to read it with. Registry names are global, 5 to 50
-letters and digits. Null for none.
+Name of the environment's Azure Container Registry, created here: the images the clusters run, which
+each cluster pulls as its kubelet identity - nothing is stored to read it with. Registry names are
+global, 5 to 50 letters and digits. Null for none.
 DESCRIPTION
 
   validation {

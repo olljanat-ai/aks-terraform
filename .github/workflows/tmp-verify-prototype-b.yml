@@ -1,6 +1,6 @@
 name: Verify prototype (temporary)
 
-# Temporary: on both clusters, waits for the example tenant's OCI source from the shared container
+# Temporary: on both clusters, waits for the example tenant's Git source from the shared container
 # registry, then checks that Flux is in sync, aks-hello runs and answers on the cluster's hostname -
 # and, on the stateless aks-prototype-b, that boot-log is not there. Remove before merging.
 on:
@@ -48,31 +48,30 @@ jobs:
           sudo az aks install-cli --only-show-errors >/dev/null
 
       # The clusters are being applied in the other workflow: wait until the example tenant's Flux
-      # configuration reads the OCI artifact.
-      - name: Wait for the tenant's OCI source
+      # configuration reads its Git repository again.
+      - name: Wait for the tenant's Git source
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
           for i in $(seq 1 75); do
             echo "== $(date -u +%T)"
             if az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$KUBECONFIG" --overwrite-existing --only-show-errors \
               && kubelogin convert-kubeconfig -l spn --client-id "$AAD_SERVICE_PRINCIPAL_CLIENT_ID" --client-secret "$AAD_SERVICE_PRINCIPAL_CLIENT_SECRET" --tenant-id "$AZURE_TENANT_ID" --server-id 6dae42f8-4368-4678-94ff-3960e28e3630 \
-              && kubectl get ocirepositories.source.toolkit.fluxcd.io -n example example; then
+              && kubectl get gitrepositories.source.toolkit.fluxcd.io -n example example; then
               exit 0
             fi
             sleep 60
           done
-          echo "::error::The example tenant's OCI source did not appear within 75 minutes."
+          echo "::error::The example tenant's Git source did not appear within 75 minutes."
           exit 1
 
       - name: Flux in sync, aks-hello up
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
           set -x
-          kubectl get deploy -n flux-system source-controller -o jsonpath='{.spec.template.metadata.labels}'; echo
-          kubectl get sa -n flux-system source-controller -o jsonpath='{.metadata.annotations}'; echo
-          kubectl wait --for=condition=Ready ocirepositories.source.toolkit.fluxcd.io example -n example --timeout=5m || {
-            kubectl get ocirepositories.source.toolkit.fluxcd.io -n example example -o yaml
-            kubectl logs -n flux-system deploy/source-controller --tail=40 | grep -i -E "example|oci|azure" || true
+          kubectl get externalsecrets.external-secrets.io -n example
+          kubectl wait --for=condition=Ready gitrepositories.source.toolkit.fluxcd.io example -n example --timeout=5m || {
+            kubectl get gitrepositories.source.toolkit.fluxcd.io -n example example -o yaml
+            kubectl logs -n flux-system deploy/source-controller --tail=40 | grep -i example || true
             exit 1
           }
           kubectl wait --for=condition=Ready kustomizations.kustomize.toolkit.fluxcd.io --all -n flux-system --timeout=5m
@@ -82,7 +81,7 @@ jobs:
             exit 1
           }
           kubectl wait --for=condition=Available deployment aks-hello -n example --timeout=5m
-          kubectl get ocirepositories.source.toolkit.fluxcd.io,kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
+          kubectl get gitrepositories.source.toolkit.fluxcd.io,kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
           kubectl get all,httproute,pvc -n example
           kubectl get pods -n example -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.containers[*].image}{"\n"}{end}'
           for i in $(seq 1 20); do

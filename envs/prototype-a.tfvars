@@ -41,6 +41,10 @@ internal_dns_zone_name = "internal.onek8s.lol"
 # cluster identity is granted a role of its own for disks there, and nothing else.
 portable_disks_enabled = true
 
+# SHARED. The environment's container registry, created by shared/ and looked up here. The kubelet
+# pulls the images from it as this cluster's identity, with AcrPull - no image pull secret.
+container_registry_name = "acrsecprototypeshared"
+
 # Existing private DNS zone for the API server.
 private_dns_zone_name = "privatelink.swedencentral.azmk8s.io"
 # private_dns_zone_resource_group_name = "rg-network"

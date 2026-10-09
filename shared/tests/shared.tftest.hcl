@@ -203,3 +203,19 @@ run "refuses_a_region_with_no_code" {
 
   expect_failures = [azurerm_user_assigned_identity.key_vault]
 }
+
+run "a_registry_is_created_with_push_for_the_deployer" {
+  command = plan
+
+  variables {
+    container_registry_name = "acrtestshared"
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_container_registry.this[0].admin_enabled == false,
+      azurerm_role_assignment.container_registry_push[0].role_definition_name == "AcrPush",
+    ])
+    error_message = "The registry should have no admin user, and the deploying principal AcrPush on it."
+  }
+}

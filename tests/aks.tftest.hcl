@@ -78,10 +78,15 @@ mock_provider "azapi" {}
 mock_provider "time" {}
 
 # The cluster module brings its own providers and its own registry lookups; none of that is under
-# test here, so it is replaced by the one output the root module reads back.
+# test here, so it is replaced by the outputs the root module reads back.
 override_module {
   target = module.aks
   outputs = {
+    kubelet_identity = {
+      clientId   = "77777777-7777-7777-7777-777777777777"
+      objectId   = "88888888-8888-8888-8888-888888888888"
+      resourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mc_rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-test-agentpool"
+    }
     resource_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test"
     oidc_issuer_profile_issuer_url = "https://swedencentral.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/11111111-1111-1111-1111-111111111111/"
   }
@@ -3204,6 +3209,25 @@ run "portable_disks_get_a_role_for_disks_only" {
   }
 }
 
+run "a_stateless_cluster_plans" {
+  command = plan
+
+  variables {
+    persistent_storage_enabled = false
+  }
+}
+
+run "portable_disks_need_persistent_storage" {
+  command = plan
+
+  variables {
+    persistent_storage_enabled = false
+    portable_disks_enabled     = true
+  }
+
+  expect_failures = [var.portable_disks_enabled]
+}
+
 run "portable_disks_are_left_ungranted_when_grants_are_made_elsewhere" {
   command = plan
 
@@ -3291,4 +3315,40 @@ run "sharing_a_vault_needs_its_name" {
   }
 
   expect_failures = [var.key_vault_create]
+}
+
+# ----------------------------------------------------------------------------------------------
+# Container registry: images pulled as the kubelet identity
+# ----------------------------------------------------------------------------------------------
+
+run "without_a_registry_nothing_is_granted_on_one" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_role_assignment.kubelet_container_registry_pull) == 0
+    error_message = "Without container_registry_name the cluster should be granted nothing on a registry."
+  }
+}
+
+run "the_kubelet_pulls_from_the_registry" {
+  command = plan
+
+  variables {
+    container_registry_name = "acrtest"
+  }
+
+  override_data {
+    target = data.azurerm_container_registry.this
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerRegistry/registries/acrtest"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_role_assignment.kubelet_container_registry_pull[0].principal_id == "88888888-8888-8888-8888-888888888888",
+      azurerm_role_assignment.kubelet_container_registry_pull[0].role_definition_name == "AcrPull",
+    ])
+    error_message = "The kubelet identity should get AcrPull on the registry."
+  }
 }

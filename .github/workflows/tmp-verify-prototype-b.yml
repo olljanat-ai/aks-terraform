@@ -2,7 +2,8 @@ name: Verify prototype (temporary)
 
 # Temporary: on both clusters, waits for the example tenant's Git source from the shared container
 # registry, then checks that Flux is in sync, aks-hello runs and answers on the cluster's hostname -
-# and, on the stateless aks-prototype-b, that boot-log is not there. Remove before merging.
+# and, on the stateless aks-prototype-b, that boot-log is not there - the image from the shared
+# container registry. Remove before merging.
 on:
   pull_request:
     paths:
